@@ -5,6 +5,9 @@ CMakeUserPresets.json
 
 # Generated files
 compile_commands.json
+ghalo.csv
+ghalo.json
+*.log
 
 # macOS
 .DS_Store

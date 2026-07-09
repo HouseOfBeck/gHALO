@@ -18,8 +18,9 @@ cmake --build build
 ctest --test-dir build
 ```
 
-Feature options are disabled by default. This keeps local configuration portable
-while preserving clear entry points for remote builds.
+Feature options are disabled by default. This keeps local configuration
+portable while preserving clear entry points for remote builds. The MPI
+executable is built only when `GHALO_ENABLE_MPI=ON`.
 
 ## Remote Development
 
@@ -62,22 +63,19 @@ Version 0 does not require ROCm or HIP.
 
 ## Source Organization Policy
 
-Future source code should keep portable and platform-specific code separated.
-A likely layout is:
+Source code should keep portable and platform-specific code separated:
 
 ```text
 include/ghalo/       public C++ interfaces
 src/core/            portable benchmark orchestration
 src/backends/mpi/    MPI implementation
-src/backends/rccl/   RCCL implementation
-src/backends/ucx/    UCX implementation
-src/gpu/hip/         HIP kernels and GPU utilities
+src/backends/rccl/   future RCCL implementation
+src/backends/ucx/    future UCX implementation
+src/gpu/hip/         future HIP kernels and GPU utilities
 tests/               portable and backend-specific tests
 examples/            runnable configurations and scheduler examples
 scripts/             build, launch, and result-processing helpers
 ```
-
-These directories should be added when implementation work begins.
 
 ## Testing Policy
 

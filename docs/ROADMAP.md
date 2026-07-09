@@ -1,7 +1,8 @@
 # Roadmap
 
 This roadmap is intentionally staged. gHALO should grow from a portable
-scaffold into a benchmark, then into a diagnostic suite.
+CPU/MPI reference path into a GPU-native benchmark, then into a diagnostic
+suite.
 
 ## Phase 0: Project Scaffold
 
@@ -9,6 +10,8 @@ scaffold into a benchmark, then into a diagnostic suite.
 - Define project mission and scope.
 - Add CMake feature options for future HIP, MPI, RCCL, and UCX support.
 - Document the development model for macOS plus remote Linux clusters.
+- Add open-source project hygiene: contribution guide, conduct policy, security
+  policy, changelog, issue templates, PR template, CI, and formatting config.
 
 ## Phase 1: Portable Core
 
@@ -62,3 +65,6 @@ scaffold into a benchmark, then into a diagnostic suite.
 - Add example batch scripts for common schedulers.
 - Add result aggregation tools.
 - Add documentation for CI, release, and contribution workflows.
+
+See [Versioning](VERSIONING.md) for the proposed release milestones that map
+these phases onto `0.x` releases.

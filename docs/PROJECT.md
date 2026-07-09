@@ -22,13 +22,15 @@ selection are central performance concerns.
 - Grow into a diagnostic suite that can identify communication topology
   problems and cluster health issues.
 
-## Non-Goals for the Initial Phase
+## Non-Goals for the Early Project
 
-- No benchmark implementation code.
 - No translated legacy HALO source.
 - No assumption that development machines have ROCm, HIP, MPI, RCCL, UCX, or
   GPU hardware installed.
 - No vendor-specific code paths outside isolated backend boundaries.
+- No GPU-only design that prevents a CPU/MPI reference path.
+- No diagnostic feature that changes HALO compatibility semantics without an
+  explicit mode and documentation.
 
 ## Intended Users
 

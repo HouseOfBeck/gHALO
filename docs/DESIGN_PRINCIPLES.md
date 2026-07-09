@@ -1,8 +1,13 @@
-1. Preserve benchmark semantics over source compatibility.
-2. GPU memory is the primary data location; avoid host staging whenever possible.
-3. Measure steady-state communication, not initialization.
-4. The slowest rank determines benchmark performance.
-5. Separate benchmark logic from communication backends.
-6. Diagnostics are a first-class feature, not an afterthought.
-7. Every architectural decision should support scaling from a laptop to a large GPU cluster.
+# Design Principles
 
+1. Preserve benchmark semantics over source compatibility.
+2. Treat GPU memory as the long-term primary data location while preserving
+   CPU/MPI reference modes.
+3. Measure steady-state communication, not initialization.
+4. Report the slowest rank as the primary application-visible performance
+   metric.
+5. Separate benchmark logic from communication backends.
+6. Make diagnostics a first-class feature, not an afterthought.
+7. Keep local development portable, even when production execution requires a
+   remote HPC system.
+8. Document architectural decisions before they become hidden assumptions.

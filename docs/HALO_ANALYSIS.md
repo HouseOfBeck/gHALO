@@ -1,12 +1,12 @@
 # HALO Benchmark Analysis
 
 This document reverse engineers Alan Wallcraft's original HALO benchmark source
-tree from `halo.tgz`. The goal is to understand the benchmark before designing
-or implementing gHALO.
+tree from `halo.tgz`. The goal is to preserve the benchmark methodology before
+extending gHALO.
 
-No gHALO benchmark code should be written from this analysis alone. This file
-captures the original benchmark philosophy, mechanics, and compatibility points
-that a modern implementation should preserve.
+No gHALO benchmark behavior should be changed from this analysis alone. This
+file captures the original benchmark philosophy, mechanics, and compatibility
+points that a modern implementation should preserve.
 
 ## Source Tree Summary
 

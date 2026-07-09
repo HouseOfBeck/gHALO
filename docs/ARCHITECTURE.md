@@ -1,8 +1,7 @@
 # Architecture
 
-gHALO will be organized around a small portable core and isolated optional
-backends. The repository is intentionally scaffolded before benchmark code is
-introduced so that HIP, MPI, RCCL, and UCX can be added without entangling
+gHALO is organized around a small portable core and isolated optional backends.
+HIP, MPI, RCCL, and UCX support must be added without entangling
 platform-specific assumptions with the core project.
 
 ## Architectural Principles
@@ -26,16 +25,16 @@ Memory and buffer management
           |
 Communication backend interface
           |
-MPI / GPU-aware MPI / RCCL / UCX
+MPI / GPU-aware MPI / RCCL / UCX / future backends
           |
 HIP kernels and device-resident buffers
 ```
 
 ## Core Layer
 
-The future core layer should define concepts shared across all benchmark modes:
+The core layer defines concepts shared across benchmark modes:
 
-- domain decomposition metadata
+- domain decomposition and topology metadata
 - halo region descriptions
 - exchange pattern definitions
 - timing and measurement policies
@@ -51,12 +50,13 @@ Backends should be added as optional components. Each backend should own its
 library-specific setup, error handling, synchronization semantics, and data
 movement behavior.
 
-Planned backend families:
+Backend families:
 
 - MPI host-buffer backend
 - GPU-aware MPI backend
 - RCCL backend
 - UCX backend
+- SHMEM-style backend experiments
 
 Backends should report enough metadata for results to identify exactly which
 communication path was used.
