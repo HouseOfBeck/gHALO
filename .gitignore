@@ -1,0 +1,16 @@
+# CMake
+build/
+build-*/
+CMakeUserPresets.json
+
+# Generated files
+compile_commands.json
+
+# macOS
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
