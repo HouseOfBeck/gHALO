@@ -7,10 +7,18 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  ubuntu-mpi:
-    name: Ubuntu MPI CMake
+  cpu-only:
+    name: CPU-only CMake
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Check out repository
@@ -19,13 +27,117 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake g++ openmpi-bin libopenmpi-dev
+          sudo apt-get install -y cmake ninja-build g++
 
-      - name: Configure
-        run: cmake -S . -B build -DGHALO_ENABLE_MPI=ON -DCMAKE_BUILD_TYPE=Release
+      - name: Print tool versions
+        run: |
+          cmake --version
+          c++ --version
 
-      - name: Build
-        run: cmake --build build --parallel
+      - name: Configure CPU-only build
+        run: >
+          cmake -S . -B build/cpu
+          -G Ninja
+          -DGHALO_ENABLE_MPI=OFF
+          -DGHALO_ENABLE_HIP=OFF
+          -DGHALO_ENABLE_MPI_HIP=OFF
+          -DCMAKE_BUILD_TYPE=Release
 
-      - name: Test
-        run: ctest --test-dir build --output-on-failure
+      - name: Build CPU-only targets
+        run: cmake --build build/cpu
+
+      - name: Run CPU-only tests
+        run: ctest --test-dir build/cpu --output-on-failure
+
+      - name: Upload CPU-only CTest log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpu-only-ctest-log
+          path: build/cpu/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  linux-mpi:
+    name: Linux MPI Build and Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install MPI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++ openmpi-bin libopenmpi-dev
+
+      - name: Print tool versions
+        run: |
+          cmake --version
+          c++ --version
+          mpirun --version
+
+      - name: Configure MPI build
+        run: >
+          cmake -S . -B build/mpi
+          -G Ninja
+          -DGHALO_ENABLE_MPI=ON
+          -DGHALO_ENABLE_HIP=OFF
+          -DGHALO_ENABLE_MPI_HIP=OFF
+          -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build MPI targets
+        run: cmake --build build/mpi
+
+      - name: Run MPI CTest suite
+        run: ctest --test-dir build/mpi --output-on-failure
+
+      - name: Run short MPI smoke benchmark
+        env:
+          OMPI_MCA_rmaps_base_oversubscribe: "1"
+          OMPI_ALLOW_RUN_AS_ROOT: "1"
+          OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: "1"
+        run: |
+          mkdir -p build/mpi-smoke
+          mpirun --oversubscribe -np 4 \
+            ./build/mpi/ghalo \
+            --target-seconds 0.01 \
+            --csv build/mpi-smoke/ghalo.csv \
+            --json build/mpi-smoke/ghalo.json
+          test -s build/mpi-smoke/ghalo.csv
+          test -s build/mpi-smoke/ghalo.json
+
+      - name: Upload MPI CTest log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpi-ctest-log
+          path: build/mpi/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  shell-validation:
+    name: Shell Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install shell tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Print shell tool versions
+        run: |
+          bash --version
+          shellcheck --version
+
+      - name: Run shell syntax checks
+        run: bash -n scripts/*.sh scripts/systems/*.sh tests/*.sh
+
+      - name: Run ShellCheck
+        run: shellcheck scripts/*.sh scripts/systems/*.sh tests/*.sh

@@ -3,7 +3,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-GHALO_TEST_TMPDIR="${TMPDIR:-/tmp}"
+GHALO_TEST_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/ghalo-workflow-smoke.XXXXXX")"
+trap 'rm -rf "${GHALO_TEST_TMPDIR}"' EXIT
 # shellcheck source=../scripts/common.sh
 source "${ROOT}/scripts/common.sh"
 
@@ -14,6 +15,32 @@ assert_eq() {
   if [[ "${expected}" != "${actual}" ]]; then
     printf 'assertion failed: %s: expected %q, got %q\n' \
       "${label}" "${expected}" "${actual}" >&2
+    exit 1
+  fi
+}
+
+assert_contains() {
+  local needle="$1"
+  local path="$2"
+  local label="$3"
+  if ! grep -Fq -- "${needle}" "${path}"; then
+    printf 'assertion failed: %s: expected to find %q in %s\n' \
+      "${label}" "${needle}" "${path}" >&2
+    printf '%s\n' "--- ${path} contents ---" >&2
+    sed -n '1,160p' "${path}" >&2 || true
+    exit 1
+  fi
+}
+
+assert_not_contains() {
+  local needle="$1"
+  local path="$2"
+  local label="$3"
+  if grep -Fq -- "${needle}" "${path}"; then
+    printf 'assertion failed: %s: did not expect to find %q in %s\n' \
+      "${label}" "${needle}" "${path}" >&2
+    printf '%s\n' "--- ${path} contents ---" >&2
+    sed -n '1,160p' "${path}" >&2 || true
     exit 1
   fi
 }
@@ -51,7 +78,8 @@ test_missing_aliased_binary_error() (
     printf 'expected missing binary check to fail\n' >&2
     exit 1
   fi
-  grep -q "active system 'borg' using build system 'frontier'" "${output}"
+  assert_contains "active system 'borg' using build system 'frontier'" \
+    "${output}" "missing binary error identifies alias"
 )
 
 test_system_resolution_metadata() (
@@ -63,10 +91,11 @@ test_system_resolution_metadata() (
     mpi-hip \
     /repo/builds/frontier/mpi-hip/ghalo
 
-  grep -q '^active_system=borg$' "${output}"
-  grep -q '^build_system=frontier$' "${output}"
-  grep -q '^backend=mpi-hip$' "${output}"
-  grep -q '^binary=/repo/builds/frontier/mpi-hip/ghalo$' "${output}"
+  assert_contains 'active_system=borg' "${output}" "active system metadata"
+  assert_contains 'build_system=frontier' "${output}" "build system metadata"
+  assert_contains 'backend=mpi-hip' "${output}" "backend metadata"
+  assert_contains 'binary=/repo/builds/frontier/mpi-hip/ghalo' \
+    "${output}" "binary metadata"
 )
 
 test_borg_environment_setup() (
@@ -124,10 +153,11 @@ test_submit_dry_run() (
     --label "dry run label" \
     --dry-run >"${output}"
 
-  grep -q '^Dry run: not submitting\.$' "${output}"
-  grep -q -- '--partition batch' "${output}"
-  grep -q -- "scripts/batch-job.sh ${ROOT// /\\ }" "${output}"
-  grep -q -- 'dry\\ run\\ label' "${output}"
+  assert_contains 'Dry run: not submitting.' "${output}" "dry-run message"
+  assert_contains '--partition batch' "${output}" "frontier partition default"
+  assert_contains "scripts/batch-job.sh ${ROOT}" \
+    "${output}" "repo root follows batch-job path"
+  assert_contains 'dry\ run\ label' "${output}" "label is shell escaped"
 )
 
 test_submit_rank_layout_failure() (
@@ -143,7 +173,8 @@ test_submit_rank_layout_failure() (
     printf 'expected submit rank-layout check to fail\n' >&2
     exit 1
   fi
-  grep -q 'ranks == nodes \* ranks-per-node' "${output}"
+  assert_contains 'ranks == nodes * ranks-per-node' \
+    "${output}" "rank layout failure"
 )
 
 test_batch_job_requires_slurm() (
@@ -154,21 +185,32 @@ test_batch_job_requires_slurm() (
     printf 'expected batch-job without SLURM_JOB_ID to fail\n' >&2
     exit 1
   fi
-  grep -q 'SLURM_JOB_ID is not set' "${output}"
+  assert_contains 'SLURM_JOB_ID is not set' "${output}" "Slurm guard"
 )
 
 test_batch_job_uses_explicit_repo_root_from_spool_copy() (
   local spool_dir="${GHALO_TEST_TMPDIR}/ghalo-slurm-spool-test"
+  local fake_repo="${GHALO_TEST_TMPDIR}/ghalo-explicit-root"
+  local marker="${GHALO_TEST_TMPDIR}/ghalo-run-marker.txt"
   local output="${GHALO_TEST_TMPDIR}/ghalo-batch-job-spool.txt"
   mkdir -p "${spool_dir}"
+  mkdir -p "${fake_repo}/scripts"
   cp "${ROOT}/scripts/batch-job.sh" "${spool_dir}/slurm_script"
   chmod +x "${spool_dir}/slurm_script"
+  cat >"${fake_repo}/scripts/run.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'mock run.sh path=%s\n' "$0" >"${GHALO_TEST_RUN_MARKER}"
+printf 'mock run.sh args=%s\n' "$*" >>"${GHALO_TEST_RUN_MARKER}"
+EOF
+  chmod +x "${fake_repo}/scripts/run.sh"
 
+  GHALO_TEST_RUN_MARKER="${marker}" \
   SLURM_JOB_ID=12345 \
   SLURM_JOB_NAME=ghalo-spool-test \
   SLURM_JOB_NODELIST=node001 \
   "${spool_dir}/slurm_script" \
-    "${ROOT}" \
+    "${fake_repo}" \
     frontier \
     mpi \
     TEST123 \
@@ -184,14 +226,18 @@ test_batch_job_uses_explicit_repo_root_from_spool_copy() (
     submit \
     out-%j \
     err-%j \
-    >"${output}" 2>&1 || true
+    >"${output}" 2>&1
 
-  grep -q "workdir: ${ROOT}" "${output}"
-  grep -q "missing executable" "${output}"
-  if grep -q "${spool_dir}/scripts/run.sh" "${output}"; then
-    printf 'batch job attempted to derive run.sh from spool path\n' >&2
-    exit 1
-  fi
+  assert_contains "workdir: ${fake_repo}" "${output}" \
+    "batch job reports explicit repo root"
+  assert_contains "gHALO batch run exit status: 0" "${output}" \
+    "mock run.sh succeeds"
+  assert_contains "mock run.sh path=${fake_repo}/scripts/run.sh" "${marker}" \
+    "batch job invoked run.sh from explicit root"
+  assert_not_contains "${spool_dir}/scripts/run.sh" "${output}" \
+    "batch job did not derive run.sh from spool path"
+  assert_not_contains "${spool_dir}/scripts/run.sh" "${marker}" \
+    "mock marker did not use spool path"
 )
 
 test_borg_build_alias_resolution

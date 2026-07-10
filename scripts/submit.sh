@@ -47,7 +47,7 @@ is_positive_integer() {
 
 is_positive_number() {
   [[ "$1" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]] &&
-    awk "BEGIN { exit !($1 > 0.0) }"
+    awk -v value="$1" 'BEGIN { exit !(value > 0.0) }'
 }
 
 root="$(ghalo_repo_root)"

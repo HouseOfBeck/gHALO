@@ -33,7 +33,6 @@ ghalo_system_cmake_args() {
 }
 
 ghalo_system_launch() {
-  local backend="$1"
   local nodes="$2"
   local ranks="$3"
   local ranks_per_node="$4"

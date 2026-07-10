@@ -169,6 +169,9 @@ run workflow and result metadata:
 GHALO_SYSTEM_NAME=frontier scripts/submit.sh --backend mpi --account <project> --nodes 1 --ranks 4 --ranks-per-node 4 --time 00:10:00
 ```
 
+GitHub Actions validate portable CPU-only, OpenMPI, and shell workflow paths.
+See [Continuous Integration](docs/CI.md).
+
 The `mpi-hip` backend also supports optional diagnostic phase timing:
 
 ```sh
@@ -198,6 +201,7 @@ gHALO values:
 - [Roadmap](docs/ROADMAP.md)
 - [Development Guide](docs/DEVELOPMENT.md)
 - [Build and Run Workflow](docs/BUILD_AND_RUN.md)
+- [Continuous Integration](docs/CI.md)
 - [Phase Timing](docs/PHASE_TIMING.md)
 - [Versioning](docs/VERSIONING.md)
 - [Historical Context](docs/HISTORY.md)
