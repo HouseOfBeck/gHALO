@@ -4,33 +4,39 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/batch-job.sh SYSTEM BACKEND ACCOUNT PARTITION NODES RANKS RANKS_PER_NODE TARGET_SECONDS VALIDATE PHASE_TIMING LABEL EXTRA_SRUN_ARGS SUBMIT_COMMAND BATCH_STDOUT BATCH_STDERR
+Usage: scripts/batch-job.sh REPO_ROOT SYSTEM BACKEND ACCOUNT PARTITION NODES RANKS RANKS_PER_NODE TARGET_SECONDS VALIDATE PHASE_TIMING LABEL EXTRA_SRUN_ARGS SUBMIT_COMMAND BATCH_STDOUT BATCH_STDERR
 EOF
 }
 
 [[ -n "${SLURM_JOB_ID:-}" ]] ||
   { echo "gHALO batch-job error: SLURM_JOB_ID is not set; this script must run inside a Slurm job" >&2; exit 1; }
-[[ $# -eq 15 ]] || { usage >&2; exit 2; }
+[[ $# -eq 16 ]] || { usage >&2; exit 2; }
 
-system="$1"
-backend="$2"
-account="$3"
-partition="$4"
-nodes="$5"
-ranks="$6"
-ranks_per_node="$7"
-target_seconds="$8"
-validate="$9"
-phase_timing="${10}"
-label="${11}"
-extra_srun_args="${12}"
-submit_command="${13}"
-batch_stdout="${14}"
-batch_stderr="${15}"
+repo_root="$1"
+system="$2"
+backend="$3"
+account="$4"
+partition="$5"
+nodes="$6"
+ranks="$7"
+ranks_per_node="$8"
+target_seconds="$9"
+validate="${10}"
+phase_timing="${11}"
+label="${12}"
+extra_srun_args="${13}"
+submit_command="${14}"
+batch_stdout="${15}"
+batch_stderr="${16}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-cd "${ROOT}"
+[[ "${repo_root}" = /* ]] ||
+  { echo "gHALO batch-job error: REPO_ROOT must be an absolute path: ${repo_root}" >&2; exit 2; }
+[[ -d "${repo_root}" ]] ||
+  { echo "gHALO batch-job error: REPO_ROOT is not a directory: ${repo_root}" >&2; exit 2; }
+[[ -x "${repo_root}/scripts/run.sh" ]] ||
+  { echo "gHALO batch-job error: REPO_ROOT/scripts/run.sh is not executable: ${repo_root}/scripts/run.sh" >&2; exit 2; }
+
+cd "${repo_root}"
 
 expand_slurm_log_path() {
   local path="$1"
@@ -67,7 +73,7 @@ gHALO batch job
   ranks_per_node: ${ranks_per_node}
   allocated_nodes: ${SLURM_JOB_NODELIST:-}
   git_commit: ${git_commit}
-  workdir: ${ROOT}
+  workdir: ${repo_root}
 EOF
 
 run_args=(
@@ -91,7 +97,7 @@ if [[ -n "${extra_srun_args}" ]]; then
 fi
 
 set +e
-"${ROOT}/scripts/run.sh" "${run_args[@]}"
+"${repo_root}/scripts/run.sh" "${run_args[@]}"
 status=$?
 set -e
 

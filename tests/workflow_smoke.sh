@@ -126,7 +126,7 @@ test_submit_dry_run() (
 
   grep -q '^Dry run: not submitting\.$' "${output}"
   grep -q -- '--partition batch' "${output}"
-  grep -q -- 'scripts/batch-job.sh' "${output}"
+  grep -q -- "scripts/batch-job.sh ${ROOT// /\\ }" "${output}"
   grep -q -- 'dry\\ run\\ label' "${output}"
 )
 
@@ -149,12 +149,49 @@ test_submit_rank_layout_failure() (
 test_batch_job_requires_slurm() (
   local output="${GHALO_TEST_TMPDIR}/ghalo-batch-job-no-slurm.txt"
   if env -u SLURM_JOB_ID "${ROOT}/scripts/batch-job.sh" \
-    frontier mpi TEST123 batch 1 4 4 0.1 0 0 smoke "" submit out err \
+    "${ROOT}" frontier mpi TEST123 batch 1 4 4 0.1 0 0 smoke "" submit out err \
     >"${output}" 2>&1; then
     printf 'expected batch-job without SLURM_JOB_ID to fail\n' >&2
     exit 1
   fi
   grep -q 'SLURM_JOB_ID is not set' "${output}"
+)
+
+test_batch_job_uses_explicit_repo_root_from_spool_copy() (
+  local spool_dir="${GHALO_TEST_TMPDIR}/ghalo-slurm-spool-test"
+  local output="${GHALO_TEST_TMPDIR}/ghalo-batch-job-spool.txt"
+  mkdir -p "${spool_dir}"
+  cp "${ROOT}/scripts/batch-job.sh" "${spool_dir}/slurm_script"
+  chmod +x "${spool_dir}/slurm_script"
+
+  SLURM_JOB_ID=12345 \
+  SLURM_JOB_NAME=ghalo-spool-test \
+  SLURM_JOB_NODELIST=node001 \
+  "${spool_dir}/slurm_script" \
+    "${ROOT}" \
+    frontier \
+    mpi \
+    TEST123 \
+    batch \
+    1 \
+    4 \
+    4 \
+    0.1 \
+    0 \
+    0 \
+    spool-test \
+    "" \
+    submit \
+    out-%j \
+    err-%j \
+    >"${output}" 2>&1 || true
+
+  grep -q "workdir: ${ROOT}" "${output}"
+  grep -q "missing executable" "${output}"
+  if grep -q "${spool_dir}/scripts/run.sh" "${output}"; then
+    printf 'batch job attempted to derive run.sh from spool path\n' >&2
+    exit 1
+  fi
 )
 
 test_borg_build_alias_resolution
@@ -165,3 +202,4 @@ test_borg_environment_setup
 test_submit_dry_run
 test_submit_rank_layout_failure
 test_batch_job_requires_slurm
+test_batch_job_uses_explicit_repo_root_from_spool_copy

@@ -295,6 +295,7 @@ fi
 
 sbatch_command+=(
   "${root}/scripts/batch-job.sh"
+  "${root}"
   "${system}"
   "${backend}"
   "${account}"
