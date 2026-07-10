@@ -316,8 +316,8 @@ void MPIHIPBackend::exchange() {
   perform_exchange(true);
 }
 
-void MPIHIPBackend::perform_exchange(bool copy_hoew_to_hins) {
-  if (copy_hoew_to_hins) {
+void MPIHIPBackend::perform_exchange(bool prepare_hins_from_hoew) {
+  if (prepare_hins_from_hoew) {
     copy_hoew_to_hins();
   }
 

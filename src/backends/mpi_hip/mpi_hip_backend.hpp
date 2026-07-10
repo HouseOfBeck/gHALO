@@ -60,7 +60,7 @@ private:
   void initialize_metadata();
   void probe_device_mpi();
   void validate_exchange();
-  void perform_exchange(bool copy_hoew_to_hins);
+  void perform_exchange(bool prepare_hins_from_hoew);
   void copy_hoew_to_hins();
   void exchange_north_south();
   void copy_hons_to_hiew();
