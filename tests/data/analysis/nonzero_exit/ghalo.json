@@ -1,0 +1,19 @@
+{
+  "version": "0.1.0",
+  "results": [
+    {
+      "backend": "MPIBackend",
+      "algorithm": "mpi-sendrecv",
+      "halo_words": 2,
+      "word_bytes": 4,
+      "n_message_bytes": 8,
+      "two_n_message_bytes": 16,
+      "total_exchange_bytes_per_rank": 48,
+      "iterations": 1,
+      "max_total_seconds": 0.001,
+      "max_average_seconds": 0.001,
+      "metadata": {"memory_location": "host", "ranks": []},
+      "topology": {"world_size": 1, "world_rank": 0, "cart_rank": 0, "rows": 1, "cols": 1, "row": 0, "col": 0, "north": 0, "south": 0, "east": 0, "west": 0}
+    }
+  ]
+}

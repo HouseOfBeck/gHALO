@@ -1,0 +1,38 @@
+{
+  "version": "0.1.0",
+  "results": [
+    {
+      "backend": "MPIHIPBackend",
+      "algorithm": "mpi-hip-sendrecv",
+      "halo_words": 2,
+      "word_bytes": 4,
+      "n_message_bytes": 8,
+      "two_n_message_bytes": 16,
+      "total_exchange_bytes_per_rank": 48,
+      "iterations": 50,
+      "max_total_seconds": 0.0004,
+      "max_average_seconds": 0.000008,
+      "metadata": {
+        "memory_location": "device",
+        "phase_timing_metadata": {
+          "enabled": true,
+          "timing_source": "MPI_Wtime",
+          "aggregation": "maximum local average across ranks"
+        },
+        "ranks": []
+      },
+      "topology": {"world_size": 8, "world_rank": 0, "cart_rank": 0, "rows": 2, "cols": 4, "row": 0, "col": 0, "north": 4, "south": 4, "east": 1, "west": 3},
+      "phase_timing": {
+        "input_device_copy_seconds": 0.000002,
+        "north_south_mpi_seconds": 0.000003,
+        "north_south_sync_seconds": 0.000002,
+        "transpose_device_copy_seconds": 0.000002,
+        "transpose_copy_sync_seconds": 0.000001,
+        "east_west_mpi_seconds": 0.000004,
+        "east_west_sync_seconds": 0.0,
+        "phase_sum_seconds": 0.000014,
+        "unattributed_seconds": -0.000006
+      }
+    }
+  ]
+}

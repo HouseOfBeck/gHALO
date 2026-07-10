@@ -9,6 +9,11 @@ CMakeUserPresets.json
 compile_commands.json
 ghalo.csv
 ghalo.json
+
+# Keep synthetic analysis fixtures in Git
+!tests/data/analysis/**/ghalo.json
+!tests/data/analysis/**/ghalo.csv
+
 *.log
 results/*
 !results/reference/

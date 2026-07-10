@@ -1,0 +1,3 @@
+version,backend,algorithm,world_size,rows,cols,halo_words,word_bytes,n_message_bytes,two_n_message_bytes,total_exchange_bytes_per_rank,iterations,max_total_seconds,max_average_seconds,root_world_rank,root_cart_rank,root_row,root_col,root_north,root_south,root_east,root_west,memory_location,mpi_library_version,hip_runtime_version,validation_enabled,validation_passed
+0.1.0,MPIBackend,mpi-sendrecv,4,2,2,2,4,8,16,48,100,1.000000000000e-03,1.000000000000e-05,0,0,0,0,2,2,1,1,host,"Open MPI","",false,false
+0.1.0,MPIBackend,mpi-sendrecv,4,2,2,4,4,16,32,96,90,1.800000000000e-03,2.000000000000e-05,0,0,0,0,2,2,1,1,host,"Open MPI","",false,false

@@ -1,0 +1,33 @@
+{
+  "version": "0.1.0",
+  "results": [
+    {
+      "backend": "MPIHIPBackend",
+      "algorithm": "mpi-hip-sendrecv",
+      "halo_words": 2,
+      "word_bytes": 4,
+      "n_message_bytes": 8,
+      "two_n_message_bytes": 16,
+      "total_exchange_bytes_per_rank": 48,
+      "iterations": 100,
+      "max_total_seconds": 0.001,
+      "max_average_seconds": 0.000010,
+      "metadata": {"memory_location": "device", "ranks": []},
+      "topology": {"world_size": 8, "world_rank": 0, "cart_rank": 0, "rows": 2, "cols": 4, "row": 0, "col": 0, "north": 4, "south": 4, "east": 1, "west": 3}
+    },
+    {
+      "backend": "MPIHIPBackend",
+      "algorithm": "mpi-hip-sendrecv",
+      "halo_words": 4,
+      "word_bytes": 4,
+      "n_message_bytes": 16,
+      "two_n_message_bytes": 32,
+      "total_exchange_bytes_per_rank": 96,
+      "iterations": 100,
+      "max_total_seconds": 0.002,
+      "max_average_seconds": 0.000020,
+      "metadata": {"memory_location": "device", "ranks": []},
+      "topology": {"world_size": 8, "world_rank": 0, "cart_rank": 0, "rows": 2, "cols": 4, "row": 0, "col": 0, "north": 4, "south": 4, "east": 1, "west": 3}
+    }
+  ]
+}

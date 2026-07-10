@@ -1,0 +1,75 @@
+{
+  "version": "0.1.0",
+  "results": [
+    {
+      "backend": "MPIBackend",
+      "algorithm": "mpi-sendrecv",
+      "halo_words": 2,
+      "word_bytes": 4,
+      "n_message_bytes": 8,
+      "two_n_message_bytes": 16,
+      "total_exchange_bytes_per_rank": 48,
+      "iterations": 100,
+      "max_total_seconds": 0.001,
+      "max_average_seconds": 0.00001,
+      "metadata": {
+        "memory_location": "host",
+        "mpi_library_version": "Open MPI",
+        "hip_runtime_version": "",
+        "device_map": "",
+        "gpu_aware_mpi_requested": false,
+        "validation_enabled": false,
+        "validation_passed": false,
+        "ranks": []
+      },
+      "topology": {
+        "world_size": 4,
+        "world_rank": 0,
+        "cart_rank": 0,
+        "rows": 2,
+        "cols": 2,
+        "row": 0,
+        "col": 0,
+        "north": 2,
+        "south": 2,
+        "east": 1,
+        "west": 1
+      }
+    },
+    {
+      "backend": "MPIBackend",
+      "algorithm": "mpi-sendrecv",
+      "halo_words": 4,
+      "word_bytes": 4,
+      "n_message_bytes": 16,
+      "two_n_message_bytes": 32,
+      "total_exchange_bytes_per_rank": 96,
+      "iterations": 90,
+      "max_total_seconds": 0.0018,
+      "max_average_seconds": 0.00002,
+      "metadata": {
+        "memory_location": "host",
+        "mpi_library_version": "Open MPI",
+        "hip_runtime_version": "",
+        "device_map": "",
+        "gpu_aware_mpi_requested": false,
+        "validation_enabled": false,
+        "validation_passed": false,
+        "ranks": []
+      },
+      "topology": {
+        "world_size": 4,
+        "world_rank": 0,
+        "cart_rank": 0,
+        "rows": 2,
+        "cols": 2,
+        "row": 0,
+        "col": 0,
+        "north": 2,
+        "south": 2,
+        "east": 1,
+        "west": 1
+      }
+    }
+  ]
+}
