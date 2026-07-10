@@ -58,7 +58,8 @@ ghalo_load_system_config() {
   local config="${root}/scripts/systems/${system}.sh"
   [[ -f "${config}" ]] ||
     ghalo_die "missing system configuration '${config}'. Set GHALO_SYSTEM_NAME to a stable cluster name or add scripts/systems/${system}.sh."
-  # shellcheck source=/dev/null
+  # System profiles are selected dynamically from the validated system name.
+  # shellcheck disable=SC1091
   source "${config}"
 }
 

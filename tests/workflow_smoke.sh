@@ -45,6 +45,9 @@ assert_not_contains() {
   fi
 }
 
+# This test intentionally mutates environment variables inside a subshell so
+# alias settings cannot leak into later workflow tests.
+# shellcheck disable=SC2030,SC2031
 test_borg_build_alias_resolution() (
   export GHALO_ACTIVE_SYSTEM=borg
   unset GHALO_BUILD_SYSTEM_ALIAS
@@ -62,6 +65,9 @@ test_borg_build_alias_resolution() (
   assert_eq borg "$(ghalo_system_build_alias mpi)" "native Borg build"
 )
 
+# This test intentionally mutates GHALO_ACTIVE_SYSTEM inside a subshell so the
+# generic default-alias case is isolated from other tests.
+# shellcheck disable=SC2030,SC2031
 test_native_default_for_generic_system() (
   export GHALO_ACTIVE_SYSTEM=example
   unset GHALO_BUILD_SYSTEM_ALIAS
@@ -98,6 +104,9 @@ test_system_resolution_metadata() (
     "${output}" "binary metadata"
 )
 
+# This test intentionally mocks PATH and MPICH_GPU_SUPPORT_ENABLED inside a
+# subshell so the Borg environment setup cannot affect later tests.
+# shellcheck disable=SC2030,SC2031
 test_borg_environment_setup() (
   local bin_dir="${GHALO_TEST_TMPDIR}/ghalo-borg-workflow-bin"
   local rocm_marker="${GHALO_TEST_TMPDIR}/ghalo-borg-rocm-loaded.txt"
