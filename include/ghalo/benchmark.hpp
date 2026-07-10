@@ -3,6 +3,7 @@
 #include "ghalo/backend.hpp"
 
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 namespace ghalo {
@@ -27,6 +28,7 @@ struct BenchmarkResult {
   double max_total_seconds{};
   TopologyInfo topology;
   BackendMetadata metadata;
+  std::optional<PhaseTimingResult> phase_timing;
 };
 
 std::vector<BenchmarkResult> run_benchmark(Backend& backend,

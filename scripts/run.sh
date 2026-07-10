@@ -18,6 +18,7 @@ Options:
   --ranks-per-node N         MPI ranks per node.
   --target-seconds SECONDS   gHALO target seconds per halo size. Default: 3.
   --validate                 Pass --validate to gHALO.
+  --phase-timing             Pass --phase-timing to gHALO.
   --label TEXT               Optional result directory label.
   --extra-srun-args ARGS     Extra launcher arguments for systems that use srun.
   -h, --help                 Show this help.
@@ -32,6 +33,7 @@ ranks="1"
 ranks_per_node=""
 target_seconds="3"
 validate=false
+phase_timing=false
 label="run"
 extra_srun_args=""
 
@@ -69,6 +71,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --validate)
       validate=true
+      shift
+      ;;
+    --phase-timing)
+      phase_timing=true
       shift
       ;;
     --label)
@@ -141,6 +147,9 @@ ghalo_args=(
 )
 if [[ "${validate}" == true ]]; then
   ghalo_args+=(--validate)
+fi
+if [[ "${phase_timing}" == true ]]; then
+  ghalo_args+=(--phase-timing)
 fi
 
 mapfile -t launch_command < <(

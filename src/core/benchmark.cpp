@@ -50,6 +50,10 @@ std::vector<BenchmarkResult> run_benchmark(Backend& backend,
     const int iterations =
         std::max(config.calibration_iterations, estimated_iterations);
 
+    if (backend.phase_timing_enabled()) {
+      backend.reset_phase_timing();
+    }
+
     backend.barrier();
     const double measured_local = time_exchanges(backend, iterations);
     const double measured_max = backend.max_time(measured_local);
@@ -67,6 +71,11 @@ std::vector<BenchmarkResult> run_benchmark(Backend& backend,
     result.max_average_seconds = measured_max / static_cast<double>(iterations);
     result.topology = backend.topology();
     result.metadata = backend.metadata();
+    if (backend.phase_timing_enabled()) {
+      result.phase_timing =
+          backend.phase_timing_result(iterations, result.max_average_seconds);
+      result.metadata = backend.metadata();
+    }
     results.push_back(result);
   }
 

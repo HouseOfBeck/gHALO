@@ -70,6 +70,7 @@ message(STATUS "  UCX:  ${GHALO_ENABLE_UCX}")
 
 add_library(
   ghalo_core
+  src/core/cli.cpp
   src/core/benchmark.cpp
   src/core/output.cpp
 )

@@ -318,12 +318,40 @@ void MPIHIPBackend::exchange() {
 
 void MPIHIPBackend::perform_exchange(bool prepare_hins_from_hoew) {
   if (prepare_hins_from_hoew) {
-    copy_hoew_to_hins();
+    if (phase_timing_collecting_) {
+      const double start = now();
+      copy_hoew_to_hins();
+      phase_timing_.input_device_copy_seconds += now() - start;
+    } else {
+      copy_hoew_to_hins();
+    }
   }
 
-  exchange_north_south();
-  copy_hons_to_hiew();
-  exchange_east_west();
+  if (phase_timing_collecting_) {
+    double start = now();
+    exchange_north_south();
+    phase_timing_.north_south_mpi_seconds += now() - start;
+
+    start = now();
+    synchronize_after_north_south_mpi();
+    phase_timing_.north_south_sync_seconds += now() - start;
+
+    start = now();
+    copy_hons_to_hiew_data();
+    phase_timing_.transpose_device_copy_seconds += now() - start;
+
+    start = now();
+    synchronize_after_transpose_copy();
+    phase_timing_.transpose_copy_sync_seconds += now() - start;
+
+    start = now();
+    exchange_east_west();
+    phase_timing_.east_west_mpi_seconds += now() - start;
+  } else {
+    exchange_north_south();
+    copy_hons_to_hiew();
+    exchange_east_west();
+  }
 }
 
 void MPIHIPBackend::copy_hoew_to_hins() {
@@ -352,15 +380,26 @@ void MPIHIPBackend::exchange_north_south() {
 }
 
 void MPIHIPBackend::copy_hons_to_hiew() {
-  const std::size_t bytes = 3 * halo_words_ * sizeof(float);
+  synchronize_after_north_south_mpi();
+  copy_hons_to_hiew_data();
+  synchronize_after_transpose_copy();
+}
 
+void MPIHIPBackend::synchronize_after_north_south_mpi() {
   // MPI completion alone may not establish the synchronization relationship
   // HIP needs before reading a GPU buffer written by GPU-aware MPI.
   hip_check(hipDeviceSynchronize(),
             "hipDeviceSynchronize after north/south MPI");
+}
+
+void MPIHIPBackend::copy_hons_to_hiew_data() {
+  const std::size_t bytes = 3 * halo_words_ * sizeof(float);
   hip_check(hipMemcpy(hiew_.data(), hons_.data(), bytes,
                       hipMemcpyDeviceToDevice),
             "hipMemcpy hons -> hiew");
+}
+
+void MPIHIPBackend::synchronize_after_transpose_copy() {
   // Correctness-first synchronization for the initial GPU-aware MPI path. A
   // future stream-aware implementation may replace this with lower-overhead
   // ordering, but the visibility cost is part of the exchange until then.
@@ -391,6 +430,72 @@ double MPIHIPBackend::max_time(double local_seconds) {
                           MPI_MAX, cart_comm_),
             "MPI_Allreduce");
   return global_seconds;
+}
+
+bool MPIHIPBackend::supports_phase_timing() const { return true; }
+
+void MPIHIPBackend::set_phase_timing_enabled(bool enabled) {
+  phase_timing_enabled_ = enabled;
+  metadata_.phase_timing_enabled = enabled;
+  if (enabled) {
+    metadata_.phase_timing_source = "MPI_Wtime";
+    metadata_.phase_timing_aggregation = "maximum local average across ranks";
+  } else {
+    metadata_.phase_timing_source.clear();
+    metadata_.phase_timing_aggregation.clear();
+    phase_timing_collecting_ = false;
+  }
+}
+
+bool MPIHIPBackend::phase_timing_enabled() const {
+  return phase_timing_enabled_;
+}
+
+void MPIHIPBackend::reset_phase_timing() {
+  phase_timing_ = {};
+  phase_timing_collecting_ = phase_timing_enabled_;
+}
+
+double MPIHIPBackend::reduced_phase_average(double local_total_seconds,
+                                            int iterations) const {
+  const double local_average =
+      local_total_seconds / static_cast<double>(iterations);
+  double global_average = 0.0;
+  mpi_check(MPI_Allreduce(&local_average, &global_average, 1, MPI_DOUBLE,
+                          MPI_MAX, cart_comm_),
+            "MPI_Allreduce phase timing");
+  return global_average;
+}
+
+PhaseTimingResult MPIHIPBackend::phase_timing_result(int iterations,
+                                                     double total_seconds) {
+  if (iterations <= 0) {
+    throw std::invalid_argument("phase timing iterations must be positive");
+  }
+  phase_timing_collecting_ = false;
+
+  PhaseTimingResult result;
+  result.input_device_copy_seconds =
+      reduced_phase_average(phase_timing_.input_device_copy_seconds,
+                            iterations);
+  result.north_south_mpi_seconds =
+      reduced_phase_average(phase_timing_.north_south_mpi_seconds, iterations);
+  result.north_south_sync_seconds =
+      reduced_phase_average(phase_timing_.north_south_sync_seconds,
+                            iterations);
+  result.transpose_device_copy_seconds =
+      reduced_phase_average(phase_timing_.transpose_device_copy_seconds,
+                            iterations);
+  result.transpose_copy_sync_seconds =
+      reduced_phase_average(phase_timing_.transpose_copy_sync_seconds,
+                            iterations);
+  result.east_west_mpi_seconds =
+      reduced_phase_average(phase_timing_.east_west_mpi_seconds, iterations);
+  result.east_west_sync_seconds =
+      reduced_phase_average(phase_timing_.east_west_sync_seconds, iterations);
+  result.phase_sum_seconds = phase_timing_sum(result);
+  result.unattributed_seconds = total_seconds - result.phase_sum_seconds;
+  return result;
 }
 
 void MPIHIPBackend::initialize_topology() {

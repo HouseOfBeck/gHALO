@@ -1,9 +1,15 @@
 #include "ghalo/benchmark.hpp"
+#include "ghalo/cli.hpp"
 #include "ghalo/exchange.hpp"
+#include "ghalo/output.hpp"
 
 #include <cassert>
 #include <cstddef>
+#include <fstream>
+#include <iterator>
+#include <sstream>
 #include <string>
+#include <stdexcept>
 
 namespace {
 
@@ -91,10 +97,142 @@ void test_self_copy_topologies() {
   }
 }
 
+std::string read_file(const std::string& path) {
+  std::ifstream input(path);
+  assert(input);
+  return {std::istreambuf_iterator<char>(input),
+          std::istreambuf_iterator<char>()};
+}
+
+ghalo::BenchmarkResult sample_result() {
+  ghalo::BenchmarkResult result;
+  result.backend = "MockBackend";
+  result.algorithm = "mock";
+  result.halo_words = 2;
+  result.word_bytes = sizeof(float);
+  result.n_message_bytes = 8;
+  result.two_n_message_bytes = 16;
+  result.total_exchange_bytes_per_rank = 48;
+  result.iterations = 5;
+  result.max_total_seconds = 0.05;
+  result.max_average_seconds = 0.01;
+  result.topology = {1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0};
+  result.metadata.memory_location = "host";
+  return result;
+}
+
+void test_phase_sum_calculation() {
+  ghalo::PhaseTimingResult phase;
+  phase.input_device_copy_seconds = 1.0;
+  phase.north_south_mpi_seconds = 2.0;
+  phase.north_south_sync_seconds = 3.0;
+  phase.transpose_device_copy_seconds = 4.0;
+  phase.transpose_copy_sync_seconds = 5.0;
+  phase.east_west_mpi_seconds = 6.0;
+  phase.east_west_sync_seconds = 7.0;
+  assert(ghalo::phase_timing_sum(phase) == 28.0);
+}
+
+void test_unsupported_phase_timing() {
+  MockBackend backend;
+  bool threw = false;
+  try {
+    backend.set_phase_timing_enabled(true);
+  } catch (const std::runtime_error&) {
+    threw = true;
+  }
+  assert(threw);
+  assert(!backend.phase_timing_enabled());
+}
+
+void test_cli_phase_timing_parse() {
+  const char* argv_storage[] = {"ghalo", "--backend", "mpi-hip",
+                                "--phase-timing", "--target-seconds", "0.1"};
+  auto* argv = const_cast<char**>(argv_storage);
+  const auto options = ghalo::parse_cli_options(6, argv);
+  assert(options.backend == "mpi-hip");
+  assert(options.phase_timing);
+  assert(options.target_seconds == 0.1);
+
+  const char* bad_argv_storage[] = {"ghalo", "--phase-timing", "--csv"};
+  auto* bad_argv = const_cast<char**>(bad_argv_storage);
+  bool threw = false;
+  try {
+    (void)ghalo::parse_cli_options(3, bad_argv);
+  } catch (const std::invalid_argument&) {
+    threw = true;
+  }
+  assert(threw);
+}
+
+void test_output_without_phase_timing_is_unchanged() {
+  const std::vector<ghalo::BenchmarkResult> results{sample_result()};
+
+  std::ostringstream console;
+  ghalo::write_console(console, results);
+  assert(console.str().find("phase timing") == std::string::npos);
+
+  const std::string csv_path = "/private/tmp/ghalo_core_smoke_no_phase.csv";
+  ghalo::write_csv(csv_path, results);
+  const std::string csv = read_file(csv_path);
+  assert(csv.find("phase_input_device_copy_seconds") == std::string::npos);
+
+  const std::string json_path = "/private/tmp/ghalo_core_smoke_no_phase.json";
+  ghalo::write_json(json_path, results);
+  const std::string json = read_file(json_path);
+  assert(json.find("\"phase_timing\"") == std::string::npos);
+}
+
+void test_output_with_phase_timing() {
+  auto result = sample_result();
+  ghalo::PhaseTimingResult phase;
+  phase.input_device_copy_seconds = 0.001;
+  phase.north_south_mpi_seconds = 0.002;
+  phase.north_south_sync_seconds = 0.003;
+  phase.transpose_device_copy_seconds = 0.004;
+  phase.transpose_copy_sync_seconds = 0.005;
+  phase.east_west_mpi_seconds = 0.006;
+  phase.east_west_sync_seconds = 0.0;
+  phase.phase_sum_seconds = ghalo::phase_timing_sum(phase);
+  phase.unattributed_seconds =
+      result.max_average_seconds - phase.phase_sum_seconds;
+  result.phase_timing = phase;
+  result.metadata.phase_timing_enabled = true;
+  result.metadata.phase_timing_source = "MPI_Wtime";
+  result.metadata.phase_timing_aggregation =
+      "maximum local average across ranks";
+
+  const std::vector<ghalo::BenchmarkResult> results{result};
+
+  std::ostringstream console;
+  ghalo::write_console(console, results);
+  assert(console.str().find("MPI-HIP phase timing") != std::string::npos);
+  assert(console.str().find("unattributed_us") != std::string::npos);
+
+  const std::string csv_path = "/private/tmp/ghalo_core_smoke_phase.csv";
+  ghalo::write_csv(csv_path, results);
+  const std::string csv = read_file(csv_path);
+  assert(csv.find("phase_input_device_copy_seconds") != std::string::npos);
+  assert(csv.find("phase_unattributed_seconds") != std::string::npos);
+
+  const std::string json_path = "/private/tmp/ghalo_core_smoke_phase.json";
+  ghalo::write_json(json_path, results);
+  const std::string json = read_file(json_path);
+  assert(json.find("\"phase_timing\"") != std::string::npos);
+  assert(json.find("\"phase_timing_metadata\"") != std::string::npos);
+  assert(json.find("\"timing_source\": \"MPI_Wtime\"") != std::string::npos);
+  assert(json.find("\"phase_sum_seconds\"") != std::string::npos);
+}
+
 } // namespace
 
 int main() {
   test_self_copy_topologies();
+  test_phase_sum_calculation();
+  test_unsupported_phase_timing();
+  test_cli_phase_timing_parse();
+  test_output_without_phase_timing_is_unchanged();
+  test_output_with_phase_timing();
 
   MockBackend backend;
   ghalo::BenchmarkConfig config;

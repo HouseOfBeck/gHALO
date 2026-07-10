@@ -72,6 +72,11 @@ maximum reduction path as the CPU backend. HIP events may be added later as
 supplemental diagnostics, but they must not replace the primary HALO-compatible
 wall-clock metric.
 
+The `mpi-hip` backend also supports optional internal phase timing for
+diagnostics. Phase timing uses `MPI_Wtime`, reports maximum local phase
+averages across ranks, and does not replace the primary compatibility metric.
+See [Phase Timing](PHASE_TIMING.md).
+
 ## Backend Separation
 
 The existing CPU/MPI backend should remain the reference backend and should not

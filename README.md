@@ -154,6 +154,14 @@ GHALO_SYSTEM_NAME=frontier scripts/build.sh --backend mpi
 GHALO_SYSTEM_NAME=frontier scripts/run.sh --backend mpi --nodes 1 --ranks 4
 ```
 
+The `mpi-hip` backend also supports optional diagnostic phase timing:
+
+```sh
+ghalo --backend mpi-hip --phase-timing
+```
+
+See [Phase Timing](docs/PHASE_TIMING.md).
+
 ## Development Philosophy
 
 gHALO values:
@@ -175,6 +183,7 @@ gHALO values:
 - [Roadmap](docs/ROADMAP.md)
 - [Development Guide](docs/DEVELOPMENT.md)
 - [Build and Run Workflow](docs/BUILD_AND_RUN.md)
+- [Phase Timing](docs/PHASE_TIMING.md)
 - [Versioning](docs/VERSIONING.md)
 - [Historical Context](docs/HISTORY.md)
 - [Version 0 Design](docs/VERSION_0_DESIGN.md)

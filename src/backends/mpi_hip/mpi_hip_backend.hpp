@@ -53,8 +53,24 @@ public:
   void barrier() override;
   double now() const override;
   double max_time(double local_seconds) override;
+  bool supports_phase_timing() const override;
+  void set_phase_timing_enabled(bool enabled) override;
+  bool phase_timing_enabled() const override;
+  void reset_phase_timing() override;
+  PhaseTimingResult phase_timing_result(int iterations,
+                                        double total_seconds) override;
 
 private:
+  struct PhaseTimingAccumulator {
+    double input_device_copy_seconds{};
+    double north_south_mpi_seconds{};
+    double north_south_sync_seconds{};
+    double transpose_device_copy_seconds{};
+    double transpose_copy_sync_seconds{};
+    double east_west_mpi_seconds{};
+    double east_west_sync_seconds{};
+  };
+
   void initialize_topology();
   void initialize_device();
   void initialize_metadata();
@@ -64,7 +80,12 @@ private:
   void copy_hoew_to_hins();
   void exchange_north_south();
   void copy_hons_to_hiew();
+  void synchronize_after_north_south_mpi();
+  void copy_hons_to_hiew_data();
+  void synchronize_after_transpose_copy();
   void exchange_east_west();
+  double reduced_phase_average(double local_total_seconds,
+                               int iterations) const;
 
   MPI_Comm cart_comm_ = MPI_COMM_NULL;
   MPI_Comm local_comm_ = MPI_COMM_NULL;
@@ -82,6 +103,9 @@ private:
   std::string device_name_;
   std::string rocr_visible_devices_;
   std::size_t halo_words_ = 0;
+  bool phase_timing_enabled_ = false;
+  bool phase_timing_collecting_ = false;
+  PhaseTimingAccumulator phase_timing_;
   HIPBuffer hins_;
   HIPBuffer hons_;
   HIPBuffer hiew_;

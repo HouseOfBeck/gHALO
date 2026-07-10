@@ -123,6 +123,7 @@ Supported options:
 --ranks-per-node <N>
 --target-seconds <seconds>
 --validate
+--phase-timing
 --label <text>
 --extra-srun-args "<args>"
 ```
@@ -227,6 +228,7 @@ GHALO_SYSTEM_NAME=frontier scripts/run.sh \
   --ranks-per-node 8 \
   --target-seconds 3 \
   --validate \
+  --phase-timing \
   --label gpu-aware
 ```
 

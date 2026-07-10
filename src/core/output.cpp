@@ -43,6 +43,15 @@ void write_json_string(std::ostream& out, const std::string& value) {
   out << '"';
 }
 
+bool has_phase_timing(const std::vector<BenchmarkResult>& results) {
+  for (const auto& result : results) {
+    if (result.phase_timing.has_value()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 } // namespace
 
 void write_console(std::ostream& out,
@@ -97,12 +106,43 @@ void write_console(std::ostream& out,
         << result.max_average_seconds << std::setw(14)
         << result.total_exchange_bytes_per_rank << "\n";
   }
+
+  if (has_phase_timing(results)) {
+    out << "\nMPI-HIP phase timing (microseconds, max average per rank):\n";
+    out << std::setw(8) << "N" << std::setw(16) << "input_copy_us"
+        << std::setw(14) << "ns_mpi_us" << std::setw(14) << "ns_sync_us"
+        << std::setw(20) << "transpose_copy_us" << std::setw(18)
+        << "transpose_sync_us" << std::setw(14) << "ew_mpi_us"
+        << std::setw(14) << "ew_sync_us" << std::setw(16)
+        << "phase_sum_us" << std::setw(14) << "total_us" << std::setw(18)
+        << "unattributed_us" << "\n";
+    out << std::string(166, '-') << "\n";
+    for (const auto& result : results) {
+      if (!result.phase_timing.has_value()) {
+        continue;
+      }
+      const auto& phase = *result.phase_timing;
+      constexpr double us = 1.0e6;
+      out << std::setw(8) << result.halo_words << std::setw(16)
+          << phase.input_device_copy_seconds * us << std::setw(14)
+          << phase.north_south_mpi_seconds * us << std::setw(14)
+          << phase.north_south_sync_seconds * us << std::setw(20)
+          << phase.transpose_device_copy_seconds * us << std::setw(18)
+          << phase.transpose_copy_sync_seconds * us << std::setw(14)
+          << phase.east_west_mpi_seconds * us << std::setw(14)
+          << phase.east_west_sync_seconds * us << std::setw(16)
+          << phase.phase_sum_seconds * us << std::setw(14)
+          << result.max_average_seconds * us << std::setw(18)
+          << phase.unattributed_seconds * us << "\n";
+    }
+  }
 }
 
 void write_csv(const std::string& path,
                const std::vector<BenchmarkResult>& results) {
   std::ofstream out(path);
   require_stream(out, path);
+  const bool include_phase_timing = has_phase_timing(results);
 
   out << "version,backend,algorithm,world_size,rows,cols,halo_words,"
          "word_bytes,n_message_bytes,two_n_message_bytes,"
@@ -110,7 +150,19 @@ void write_csv(const std::string& path,
          "max_average_seconds,root_world_rank,root_cart_rank,root_row,"
          "root_col,root_north,root_south,root_east,root_west,"
          "memory_location,mpi_library_version,hip_runtime_version,"
-         "validation_enabled,validation_passed\n";
+         "validation_enabled,validation_passed";
+  if (include_phase_timing) {
+    out << ",phase_input_device_copy_seconds,"
+           "phase_north_south_mpi_seconds,"
+           "phase_north_south_sync_seconds,"
+           "phase_transpose_device_copy_seconds,"
+           "phase_transpose_copy_sync_seconds,"
+           "phase_east_west_mpi_seconds,"
+           "phase_east_west_sync_seconds,"
+           "phase_sum_seconds,"
+           "phase_unattributed_seconds";
+  }
+  out << "\n";
 
   out << std::scientific << std::setprecision(12);
   for (const auto& result : results) {
@@ -131,8 +183,23 @@ void write_csv(const std::string& path,
     out << ',';
     write_json_string(out, result.metadata.hip_runtime_version);
     out << ',' << (result.metadata.validation_enabled ? "true" : "false")
-        << ',' << (result.metadata.validation_passed ? "true" : "false")
-        << '\n';
+        << ',' << (result.metadata.validation_passed ? "true" : "false");
+    if (include_phase_timing) {
+      if (result.phase_timing.has_value()) {
+        const auto& phase = *result.phase_timing;
+        out << ',' << phase.input_device_copy_seconds << ','
+            << phase.north_south_mpi_seconds << ','
+            << phase.north_south_sync_seconds << ','
+            << phase.transpose_device_copy_seconds << ','
+            << phase.transpose_copy_sync_seconds << ','
+            << phase.east_west_mpi_seconds << ','
+            << phase.east_west_sync_seconds << ','
+            << phase.phase_sum_seconds << ',' << phase.unattributed_seconds;
+      } else {
+        out << ",,,,,,,,,";
+      }
+    }
+    out << '\n';
   }
 }
 
@@ -187,6 +254,17 @@ void write_json(const std::string& path,
         << (r.metadata.validation_enabled ? "true" : "false") << ",\n";
     out << "        \"validation_passed\": "
         << (r.metadata.validation_passed ? "true" : "false") << ",\n";
+    if (r.metadata.phase_timing_enabled) {
+      out << "        \"phase_timing_metadata\": {\n";
+      out << "          \"enabled\": true,\n";
+      out << "          \"timing_source\": ";
+      write_json_string(out, r.metadata.phase_timing_source);
+      out << ",\n";
+      out << "          \"aggregation\": ";
+      write_json_string(out, r.metadata.phase_timing_aggregation);
+      out << "\n";
+      out << "        },\n";
+    }
     out << "        \"ranks\": [\n";
     for (std::size_t j = 0; j < r.metadata.ranks.size(); ++j) {
       const auto& rank = r.metadata.ranks[j];
@@ -224,7 +302,30 @@ void write_json(const std::string& path,
     out << "        \"south\": " << r.topology.south << ",\n";
     out << "        \"east\": " << r.topology.east << ",\n";
     out << "        \"west\": " << r.topology.west << "\n";
-    out << "      }\n";
+    out << "      }" << (r.phase_timing.has_value() ? "," : "") << "\n";
+    if (r.phase_timing.has_value()) {
+      const auto& phase = *r.phase_timing;
+      out << "      \"phase_timing\": {\n";
+      out << "        \"input_device_copy_seconds\": "
+          << phase.input_device_copy_seconds << ",\n";
+      out << "        \"north_south_mpi_seconds\": "
+          << phase.north_south_mpi_seconds << ",\n";
+      out << "        \"north_south_sync_seconds\": "
+          << phase.north_south_sync_seconds << ",\n";
+      out << "        \"transpose_device_copy_seconds\": "
+          << phase.transpose_device_copy_seconds << ",\n";
+      out << "        \"transpose_copy_sync_seconds\": "
+          << phase.transpose_copy_sync_seconds << ",\n";
+      out << "        \"east_west_mpi_seconds\": "
+          << phase.east_west_mpi_seconds << ",\n";
+      out << "        \"east_west_sync_seconds\": "
+          << phase.east_west_sync_seconds << ",\n";
+      out << "        \"phase_sum_seconds\": " << phase.phase_sum_seconds
+          << ",\n";
+      out << "        \"unattributed_seconds\": "
+          << phase.unattributed_seconds << "\n";
+      out << "      }\n";
+    }
     out << "    }" << (i + 1 == results.size() ? "" : ",") << "\n";
   }
 
