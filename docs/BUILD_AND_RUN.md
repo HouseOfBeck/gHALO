@@ -158,6 +158,7 @@ modules.txt
 slurm-job.txt
 stderr.txt
 stdout.txt
+submission.txt
 system-resolution.txt
 ```
 
@@ -202,6 +203,119 @@ with fields for `active_system`, `build_system`, `backend`, and `binary`.
 Profiles may honor `GHALO_BUILD_SYSTEM_ALIAS=<name>` for explicit aliasing and
 `GHALO_USE_NATIVE_BUILD=1` to force the active system's own build tree.
 
+## Batch Submission
+
+Use `scripts/submit.sh` to submit a gHALO run through Slurm `sbatch` instead of
+first obtaining an interactive allocation. The submitted Slurm job runs
+`scripts/batch-job.sh`, and `batch-job.sh` invokes `scripts/run.sh`. This keeps
+interactive and batch runs on the same system profiles, binary resolution,
+environment setup, result directory layout, metadata capture, and benchmark
+arguments.
+
+Example Borg MPI-HIP phase-timing run:
+
+```sh
+GHALO_SYSTEM_NAME=borg scripts/submit.sh \
+  --backend mpi-hip \
+  --account VEN004 \
+  --partition batch \
+  --nodes 6 \
+  --ranks 48 \
+  --ranks-per-node 8 \
+  --time 00:20:00 \
+  --target-seconds 3 \
+  --validate \
+  --phase-timing \
+  --label phase-6node-48gpu
+```
+
+Example Frontier scale run:
+
+```sh
+GHALO_SYSTEM_NAME=frontier scripts/submit.sh \
+  --backend mpi-hip \
+  --account VEN004 \
+  --partition batch \
+  --nodes 128 \
+  --ranks 1024 \
+  --ranks-per-node 8 \
+  --time 00:30:00 \
+  --target-seconds 3 \
+  --validate \
+  --label scale-128node
+```
+
+Supported submission options include:
+
+```text
+--system <name>
+--backend mpi|mpi-hip
+--account <account>
+--partition <partition>
+--nodes <N>
+--ranks <N>
+--ranks-per-node <N>
+--time <HH:MM:SS>
+--target-seconds <seconds>
+--validate
+--phase-timing
+--label <text>
+--job-name <name>
+--constraint <constraint>
+--reservation <reservation>
+--qos <qos>
+--exclusive
+--dependency <dependency>
+--extra-sbatch-args "<args>"
+--extra-srun-args "<args>"
+--confirm-large-run
+--dry-run
+```
+
+The submit script requires `backend`, `nodes`, `ranks`, `ranks-per-node`, and
+wall-clock `time`. It also requires an account unless a system profile provides
+a default account. Explicit command-line values override system-profile
+defaults. Frontier currently provides a `batch` partition default; accounts are
+left explicit because they are allocation-specific.
+
+For normal gHALO runs, `scripts/submit.sh` requires:
+
+```text
+ranks == nodes * ranks-per-node
+```
+
+Use `scripts/run.sh` directly inside a custom allocation for unusual layouts.
+
+The submit script prints the requested resources and the complete shell-escaped
+`sbatch` command before submission. With `--dry-run`, it prints the command but
+does not submit it.
+
+Batch stdout and stderr are written under:
+
+```text
+batch-logs/<system>/%x-%j.out
+batch-logs/<system>/%x-%j.err
+```
+
+Routine batch logs are ignored by Git.
+
+Large-run safety:
+
+- runs above 128 nodes print a warning;
+- runs above 512 nodes require `--confirm-large-run`;
+- these thresholds may be adjusted with `GHALO_LARGE_RUN_WARNING_NODES` and
+  `GHALO_LARGE_RUN_CONFIRM_NODES`.
+
+The normal timestamped result directory remains the result hierarchy. When a
+run is submitted through `scripts/submit.sh`, `scripts/run.sh` also writes:
+
+```text
+submission.txt
+```
+
+with the Slurm job ID, job name, submission system, account, partition, node
+list, original submit command, and batch stdout/stderr paths.
+
 ## System Configuration Interface
 
 Each system file is a Bash script at:
@@ -217,6 +331,9 @@ ghalo_system_setup_build <backend>
 ghalo_system_setup_run <backend>
 ghalo_system_cmake_args <backend>
 ghalo_system_launch <backend> <nodes> <ranks> <ranks-per-node> <extra-args> <binary> [ghalo args...]
+ghalo_system_default_account
+ghalo_system_default_partition
+ghalo_system_default_batch_time
 ```
 
 The interface is intentionally small:
@@ -226,6 +343,7 @@ The interface is intentionally small:
 - `ghalo_system_cmake_args` prints one CMake argument per line;
 - `ghalo_system_launch` prints one launcher argument per line, including the
   binary and gHALO arguments.
+- default functions may print optional Slurm defaults for `scripts/submit.sh`.
 
 Do not put benchmark logic, timing changes, or backend semantics into a system
 configuration file. System files should describe how to build and launch gHALO

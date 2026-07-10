@@ -162,6 +162,13 @@ Frontier build trees by default:
 GHALO_SYSTEM_NAME=borg scripts/run.sh --backend mpi-hip --nodes 1 --ranks 4 --validate
 ```
 
+Batch submission is available through Slurm `sbatch` while preserving the same
+run workflow and result metadata:
+
+```sh
+GHALO_SYSTEM_NAME=frontier scripts/submit.sh --backend mpi --account <project> --nodes 1 --ranks 4 --ranks-per-node 4 --time 00:10:00
+```
+
 The `mpi-hip` backend also supports optional diagnostic phase timing:
 
 ```sh

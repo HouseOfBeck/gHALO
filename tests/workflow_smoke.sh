@@ -111,8 +111,57 @@ test_borg_environment_setup() (
   assert_eq 1 "${GHALO_TEST_ROCM_624_LOADED}" "Borg ROCm 6.2.4 load"
 )
 
+test_submit_dry_run() (
+  local output="${GHALO_TEST_TMPDIR}/ghalo-submit-dry-run.txt"
+  GHALO_SYSTEM_NAME=frontier "${ROOT}/scripts/submit.sh" \
+    --backend mpi \
+    --account TEST123 \
+    --nodes 2 \
+    --ranks 16 \
+    --ranks-per-node 8 \
+    --time 00:05:00 \
+    --target-seconds 0.1 \
+    --label "dry run label" \
+    --dry-run >"${output}"
+
+  grep -q '^Dry run: not submitting\.$' "${output}"
+  grep -q -- '--partition batch' "${output}"
+  grep -q -- 'scripts/batch-job.sh' "${output}"
+  grep -q -- 'dry\\ run\\ label' "${output}"
+)
+
+test_submit_rank_layout_failure() (
+  local output="${GHALO_TEST_TMPDIR}/ghalo-submit-rank-failure.txt"
+  if GHALO_SYSTEM_NAME=frontier "${ROOT}/scripts/submit.sh" \
+    --backend mpi \
+    --account TEST123 \
+    --nodes 2 \
+    --ranks 15 \
+    --ranks-per-node 8 \
+    --time 00:05:00 \
+    --dry-run >"${output}" 2>&1; then
+    printf 'expected submit rank-layout check to fail\n' >&2
+    exit 1
+  fi
+  grep -q 'ranks == nodes \* ranks-per-node' "${output}"
+)
+
+test_batch_job_requires_slurm() (
+  local output="${GHALO_TEST_TMPDIR}/ghalo-batch-job-no-slurm.txt"
+  if env -u SLURM_JOB_ID "${ROOT}/scripts/batch-job.sh" \
+    frontier mpi TEST123 batch 1 4 4 0.1 0 0 smoke "" submit out err \
+    >"${output}" 2>&1; then
+    printf 'expected batch-job without SLURM_JOB_ID to fail\n' >&2
+    exit 1
+  fi
+  grep -q 'SLURM_JOB_ID is not set' "${output}"
+)
+
 test_borg_build_alias_resolution
 test_native_default_for_generic_system
 test_missing_aliased_binary_error
 test_system_resolution_metadata
 test_borg_environment_setup
+test_submit_dry_run
+test_submit_rank_layout_failure
+test_batch_job_requires_slurm

@@ -2,6 +2,7 @@
 build/
 build-*/
 builds/
+batch-logs/
 CMakeUserPresets.json
 
 # Generated files

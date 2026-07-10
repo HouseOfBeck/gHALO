@@ -143,6 +143,12 @@ ghalo_capture_environment() {
       GHALO_SYSTEM_NAME \
       GHALO_BUILD_SYSTEM_ALIAS \
       GHALO_USE_NATIVE_BUILD \
+      GHALO_SUBMIT_COMMAND \
+      GHALO_BATCH_STDOUT \
+      GHALO_BATCH_STDERR \
+      GHALO_SUBMISSION_SYSTEM \
+      GHALO_SUBMISSION_ACCOUNT \
+      GHALO_SUBMISSION_PARTITION \
       MPICH_DIR \
       MPICH_GPU_SUPPORT_ENABLED \
       MPI_HOME \
@@ -202,4 +208,16 @@ ghalo_system_cmake_args() {
 
 ghalo_system_launch() {
   ghalo_die "system configuration did not define ghalo_system_launch"
+}
+
+ghalo_system_default_account() {
+  :
+}
+
+ghalo_system_default_partition() {
+  :
+}
+
+ghalo_system_default_batch_time() {
+  :
 }

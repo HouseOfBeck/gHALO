@@ -171,6 +171,19 @@ printf '%q ' "${launch_command[@]}" >"${result_dir}/command.txt"
 printf '\n' >>"${result_dir}/command.txt"
 ghalo_write_system_resolution "${result_dir}/system-resolution.txt" \
   "${system}" "${build_system}" "${backend}" "${binary}"
+if [[ -n "${GHALO_SUBMIT_COMMAND:-}" || -n "${SLURM_JOB_ID:-}" ]]; then
+  {
+    printf 'slurm_job_id=%s\n' "${SLURM_JOB_ID:-}"
+    printf 'slurm_job_name=%s\n' "${SLURM_JOB_NAME:-}"
+    printf 'submission_system=%s\n' "${GHALO_SUBMISSION_SYSTEM:-${system}}"
+    printf 'account=%s\n' "${GHALO_SUBMISSION_ACCOUNT:-}"
+    printf 'partition=%s\n' "${GHALO_SUBMISSION_PARTITION:-}"
+    printf 'node_list=%s\n' "${SLURM_JOB_NODELIST:-}"
+    printf 'batch_stdout=%s\n' "${GHALO_BATCH_STDOUT:-}"
+    printf 'batch_stderr=%s\n' "${GHALO_BATCH_STDERR:-}"
+    printf 'submit_command=%s\n' "${GHALO_SUBMIT_COMMAND:-}"
+  } >"${result_dir}/submission.txt"
+fi
 
 ghalo_capture_modules "${result_dir}/modules.txt"
 ghalo_capture_environment "${result_dir}/environment.txt"

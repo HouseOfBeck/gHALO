@@ -52,6 +52,10 @@ ghalo_system_cmake_args() {
   fi
 }
 
+ghalo_system_default_partition() {
+  printf '%s\n' batch
+}
+
 ghalo_system_launch() {
   local backend="$1"
   local nodes="$2"
