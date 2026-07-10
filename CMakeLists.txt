@@ -102,10 +102,50 @@ if(GHALO_ENABLE_MPI)
         ghalo_core
         MPI::MPI_CXX
     )
+
+    set(GHALO_MPI_INCLUDE_DIRS ${MPI_CXX_INCLUDE_DIRS})
+    get_target_property(
+      GHALO_MPI_TARGET_INCLUDE_DIRS
+      MPI::MPI_CXX
+      INTERFACE_INCLUDE_DIRECTORIES
+    )
+    if(GHALO_MPI_TARGET_INCLUDE_DIRS)
+      list(APPEND GHALO_MPI_INCLUDE_DIRS ${GHALO_MPI_TARGET_INCLUDE_DIRS})
+    endif()
+    if(NOT GHALO_MPI_INCLUDE_DIRS
+       AND DEFINED ENV{MPICH_DIR}
+       AND EXISTS "$ENV{MPICH_DIR}/include/mpi.h")
+      list(APPEND GHALO_MPI_INCLUDE_DIRS "$ENV{MPICH_DIR}/include")
+    endif()
+    if(NOT GHALO_MPI_INCLUDE_DIRS)
+      message(
+        FATAL_ERROR
+        "GHALO_ENABLE_MPI_HIP requires an explicit MPI header directory for "
+        "HIP compilation. CMake did not expose MPI_CXX_INCLUDE_DIRS or "
+        "MPI::MPI_CXX INTERFACE_INCLUDE_DIRECTORIES, and MPICH_DIR/include/mpi.h "
+        "was not available."
+      )
+    endif()
+    list(REMOVE_DUPLICATES GHALO_MPI_INCLUDE_DIRS)
+    set(GHALO_MPI_HEADER_FOUND OFF)
+    foreach(GHALO_MPI_INCLUDE_DIR IN LISTS GHALO_MPI_INCLUDE_DIRS)
+      if(EXISTS "${GHALO_MPI_INCLUDE_DIR}/mpi.h")
+        set(GHALO_MPI_HEADER_FOUND ON)
+      endif()
+    endforeach()
+    if(NOT GHALO_MPI_HEADER_FOUND)
+      message(
+        FATAL_ERROR
+        "GHALO_ENABLE_MPI_HIP found MPI include directories, but none contain "
+        "mpi.h: ${GHALO_MPI_INCLUDE_DIRS}"
+      )
+    endif()
+    message(STATUS "  MPI headers for HIP: ${GHALO_MPI_INCLUDE_DIRS}")
+
     target_include_directories(
       ghalo_mpi_hip_backend
       PRIVATE
-        ${MPI_CXX_INCLUDE_DIRS}
+        ${GHALO_MPI_INCLUDE_DIRS}
     )
     target_compile_options(
       ghalo_mpi_hip_backend

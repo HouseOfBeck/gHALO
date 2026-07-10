@@ -12,7 +12,7 @@ namespace ghalo {
 class HIPBuffer final {
 public:
   HIPBuffer() = default;
-  ~HIPBuffer();
+  ~HIPBuffer() noexcept;
 
   HIPBuffer(const HIPBuffer&) = delete;
   HIPBuffer& operator=(const HIPBuffer&) = delete;
@@ -21,7 +21,7 @@ public:
   HIPBuffer& operator=(HIPBuffer&& other) noexcept;
 
   void allocate(std::size_t bytes);
-  void reset();
+  void reset() noexcept;
   void* data() const;
   std::size_t bytes() const;
 
@@ -60,6 +60,7 @@ private:
   void initialize_metadata();
   void probe_device_mpi();
   void validate_exchange();
+  void perform_exchange(bool copy_hoew_to_hins);
 
   MPI_Comm cart_comm_ = MPI_COMM_NULL;
   MPI_Comm local_comm_ = MPI_COMM_NULL;

@@ -1,9 +1,12 @@
 #include "mpi_hip_backend.hpp"
 
+#include "ghalo/exchange.hpp"
+
 #include <hip/hip_runtime.h>
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -144,6 +147,25 @@ void launch_fill_rank(void* data, std::size_t count, int rank) {
   hip_check(hipGetLastError(), "fill_rank_kernel launch");
 }
 
+void exchange_segment(MPI_Comm comm, int local_rank, float* send_buffer,
+                      int count, int destination_rank, int send_tag,
+                      float* receive_buffer, int source_rank, int receive_tag,
+                      const char* label) {
+  if (use_local_copy_for_exchange_segment(local_rank, destination_rank,
+                                          source_rank)) {
+    hip_check(hipMemcpy(receive_buffer, send_buffer,
+                        static_cast<std::size_t>(count) * sizeof(float),
+                        hipMemcpyDeviceToDevice),
+              label);
+    return;
+  }
+
+  mpi_check(MPI_Sendrecv(send_buffer, count, MPI_FLOAT, destination_rank,
+                         send_tag, receive_buffer, count, MPI_FLOAT,
+                         source_rank, receive_tag, comm, MPI_STATUS_IGNORE),
+            label);
+}
+
 std::string hip_runtime_version() {
   int version = 0;
   hip_check(hipRuntimeGetVersion(&version), "hipRuntimeGetVersion");
@@ -152,9 +174,51 @@ std::string hip_runtime_version() {
   return out.str();
 }
 
+std::vector<float> copy_prefix_to_host(const HIPBuffer& buffer,
+                                       std::size_t total_count) {
+  const std::size_t sample_count = std::min<std::size_t>(8, total_count);
+  std::vector<float> values(sample_count);
+  if (sample_count == 0) {
+    return values;
+  }
+  hip_check(hipMemcpy(values.data(), buffer.data(), sample_count * sizeof(float),
+                      hipMemcpyDeviceToHost),
+            "hipMemcpy validation prefix");
+  return values;
+}
+
+std::string values_string(const std::vector<float>& values) {
+  std::ostringstream out;
+  out << "[";
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    if (i != 0) {
+      out << ", ";
+    }
+    out << values[i];
+  }
+  out << "]";
+  return out.str();
+}
+
+void verify_pattern_prefix(const std::vector<float>& values, int source_rank,
+                           std::size_t halo_words, const char* label) {
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    const int segment = i < halo_words ? 1 : 2;
+    const float expected =
+        pattern_value(source_rank, segment, static_cast<int>(halo_words),
+                      static_cast<int>(i));
+    if (values[i] != expected) {
+      std::ostringstream message;
+      message << label << " prefix verification failed at index " << i
+              << ": expected " << expected << ", actual " << values[i];
+      throw std::runtime_error(message.str());
+    }
+  }
+}
+
 } // namespace
 
-HIPBuffer::~HIPBuffer() { reset(); }
+HIPBuffer::~HIPBuffer() noexcept { reset(); }
 
 HIPBuffer::HIPBuffer(HIPBuffer&& other) noexcept
     : ptr_(other.ptr_), bytes_(other.bytes_) {
@@ -182,9 +246,9 @@ void HIPBuffer::allocate(std::size_t bytes) {
   bytes_ = bytes;
 }
 
-void HIPBuffer::reset() {
+void HIPBuffer::reset() noexcept {
   if (ptr_ != nullptr) {
-    hipFree(ptr_);
+    static_cast<void>(hipFree(ptr_));
     ptr_ = nullptr;
     bytes_ = 0;
   }
@@ -249,42 +313,41 @@ void MPIHIPBackend::setup(std::size_t halo_words) {
 }
 
 void MPIHIPBackend::exchange() {
+  perform_exchange(true);
+}
+
+void MPIHIPBackend::perform_exchange(bool copy_hoew_to_hins) {
   const int n = static_cast<int>(halo_words_);
   const int two_n = 2 * n;
   const std::size_t bytes = 3 * halo_words_ * sizeof(float);
 
-  hip_check(hipMemcpy(hins_.data(), hoew_.data(), bytes,
-                      hipMemcpyDeviceToDevice),
-            "hipMemcpy hoew -> hins");
+  if (copy_hoew_to_hins) {
+    hip_check(hipMemcpy(hins_.data(), hoew_.data(), bytes,
+                        hipMemcpyDeviceToDevice),
+              "hipMemcpy hoew -> hins");
+  }
 
   auto* hins = static_cast<float*>(hins_.data());
   auto* hons = static_cast<float*>(hons_.data());
   auto* hiew = static_cast<float*>(hiew_.data());
   auto* hoew = static_cast<float*>(hoew_.data());
 
-  mpi_check(MPI_Sendrecv(hins, n, MPI_FLOAT, topology_.south, 9901, hons, n,
-                         MPI_FLOAT, topology_.north, 9901, cart_comm_,
-                         MPI_STATUS_IGNORE),
-            "MPI_Sendrecv north/south N");
+  exchange_segment(cart_comm_, rank(), hins, n, topology_.south, 9901, hons,
+                   topology_.north, 9901, "exchange north/south N");
 
-  mpi_check(MPI_Sendrecv(hins + n, two_n, MPI_FLOAT, topology_.north, 9902,
-                         hons + n, two_n, MPI_FLOAT, topology_.south, 9902,
-                         cart_comm_, MPI_STATUS_IGNORE),
-            "MPI_Sendrecv north/south 2N");
+  exchange_segment(cart_comm_, rank(), hins + n, two_n, topology_.north, 9902,
+                   hons + n, topology_.south, 9902,
+                   "exchange north/south 2N");
 
   hip_check(hipMemcpy(hiew_.data(), hons_.data(), bytes,
                       hipMemcpyDeviceToDevice),
             "hipMemcpy hons -> hiew");
 
-  mpi_check(MPI_Sendrecv(hiew, n, MPI_FLOAT, topology_.west, 9903, hoew, n,
-                         MPI_FLOAT, topology_.east, 9903, cart_comm_,
-                         MPI_STATUS_IGNORE),
-            "MPI_Sendrecv east/west N");
+  exchange_segment(cart_comm_, rank(), hiew, n, topology_.west, 9903, hoew,
+                   topology_.east, 9903, "exchange east/west N");
 
-  mpi_check(MPI_Sendrecv(hiew + n, two_n, MPI_FLOAT, topology_.east, 9904,
-                         hoew + n, two_n, MPI_FLOAT, topology_.west, 9904,
-                         cart_comm_, MPI_STATUS_IGNORE),
-            "MPI_Sendrecv east/west 2N");
+  exchange_segment(cart_comm_, rank(), hiew + n, two_n, topology_.east, 9904,
+                   hoew + n, topology_.west, 9904, "exchange east/west 2N");
 }
 
 void MPIHIPBackend::barrier() { mpi_check(MPI_Barrier(cart_comm_), "MPI_Barrier"); }
@@ -486,10 +549,9 @@ void MPIHIPBackend::probe_device_mpi() {
   launch_fill_rank(send.data(), 1, rank());
   hip_check(hipDeviceSynchronize(), "hipDeviceSynchronize before MPI probe");
 
-  mpi_check(MPI_Sendrecv(send.data(), 1, MPI_FLOAT, topology_.east, 9910,
-                         recv.data(), 1, MPI_FLOAT, topology_.west, 9910,
-                         cart_comm_, MPI_STATUS_IGNORE),
-            "MPI_Sendrecv GPU-aware probe");
+  exchange_segment(cart_comm_, rank(), static_cast<float*>(send.data()), 1,
+                   topology_.east, 9910, static_cast<float*>(recv.data()),
+                   topology_.west, 9910, "GPU-aware probe exchange");
 
   float value = -1.0F;
   hip_check(hipMemcpy(&value, recv.data(), sizeof(float),
@@ -509,9 +571,52 @@ void MPIHIPBackend::validate_exchange() {
   launch_fill_pattern(hoew_.data(), halo_words_, rank());
   hip_check(hipDeviceSynchronize(), "hipDeviceSynchronize before validation");
 
-  exchange();
-
   const std::size_t count = 3 * halo_words_;
+  std::vector<float> local_hoew_prefix;
+  std::vector<float> local_hins_prefix;
+  std::vector<float> received_hons_prefix;
+
+  auto diagnostic_message = [&](const std::string& reason) {
+    std::ostringstream message;
+    message << reason << "; global_rank=" << rank()
+            << " local_rank=" << local_rank_
+            << " selected_hip_device=" << selected_device_
+            << " cart_dims=(" << topology_.rows << "," << topology_.cols
+            << ")"
+            << " cart_coords=(" << topology_.row << "," << topology_.col
+            << ")"
+            << " neighbors north=" << topology_.north
+            << " south=" << topology_.south << " east=" << topology_.east
+            << " west=" << topology_.west
+            << " local_hoew_prefix=" << values_string(local_hoew_prefix)
+            << " local_hins_prefix=" << values_string(local_hins_prefix)
+            << " received_hons_prefix=" << values_string(received_hons_prefix)
+            << " MPICH_GPU_SUPPORT_ENABLED="
+            << getenv_string("MPICH_GPU_SUPPORT_ENABLED")
+            << " ROCR_VISIBLE_DEVICES=" << rocr_visible_devices_;
+    return message.str();
+  };
+
+  try {
+    local_hoew_prefix = copy_prefix_to_host(hoew_, count);
+    verify_pattern_prefix(local_hoew_prefix, rank(), halo_words_, "hoew");
+
+    hip_check(hipMemcpy(hins_.data(), hoew_.data(), count * sizeof(float),
+                        hipMemcpyDeviceToDevice),
+              "hipMemcpy validation hoew -> hins");
+
+    local_hins_prefix = copy_prefix_to_host(hins_, count);
+    verify_pattern_prefix(local_hins_prefix, rank(), halo_words_, "hins");
+  } catch (const std::exception& error) {
+    throw std::runtime_error(diagnostic_message(error.what()));
+  }
+
+  try {
+    perform_exchange(false);
+  } catch (const std::exception& error) {
+    throw std::runtime_error(diagnostic_message(error.what()));
+  }
+
   std::vector<float> hons(count);
   std::vector<float> hoew(count);
   hip_check(hipMemcpy(hons.data(), hons_.data(), count * sizeof(float),
@@ -520,6 +625,10 @@ void MPIHIPBackend::validate_exchange() {
   hip_check(hipMemcpy(hoew.data(), hoew_.data(), count * sizeof(float),
                       hipMemcpyDeviceToHost),
             "hipMemcpy validation hoew");
+  const auto hons_sample_count = std::min<std::size_t>(8, hons.size());
+  received_hons_prefix.assign(hons.begin(),
+                              hons.begin() +
+                                  static_cast<std::ptrdiff_t>(hons_sample_count));
 
   const int north_east =
       cart_rank(cart_comm_, (topology_.row + 1) % topology_.rows,
@@ -535,7 +644,19 @@ void MPIHIPBackend::validate_exchange() {
       std::ostringstream message;
       message << "validation failed on rank " << rank() << " direction "
               << direction << " index " << index << ": expected " << expected
-              << ", actual " << actual;
+              << ", actual " << actual << "; cart_dims=(" << topology_.rows
+              << "," << topology_.cols << ")"
+              << " cart_coords=(" << topology_.row << "," << topology_.col
+              << ")"
+              << " neighbors north=" << topology_.north
+              << " south=" << topology_.south << " east=" << topology_.east
+              << " west=" << topology_.west
+              << " local_hoew_prefix=" << values_string(local_hoew_prefix)
+              << " local_hins_prefix=" << values_string(local_hins_prefix)
+              << " received_hons_prefix=" << values_string(received_hons_prefix)
+              << " MPICH_GPU_SUPPORT_ENABLED="
+              << getenv_string("MPICH_GPU_SUPPORT_ENABLED")
+              << " ROCR_VISIBLE_DEVICES=" << rocr_visible_devices_;
       throw std::runtime_error(message.str());
     }
   };

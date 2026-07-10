@@ -140,6 +140,12 @@ cmake -S . -B build -DGHALO_ENABLE_UCX=ON
 Those options are intended for remote Linux HPC environments where the required
 toolchains and libraries are available.
 
+On Frontier, GPU-aware MPI runs require:
+
+```sh
+export MPICH_GPU_SUPPORT_ENABLED=1
+```
+
 ## Development Philosophy
 
 gHALO values:

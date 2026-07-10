@@ -1,4 +1,5 @@
 #include "ghalo/benchmark.hpp"
+#include "ghalo/exchange.hpp"
 
 #include <cassert>
 #include <cstddef>
@@ -39,9 +40,62 @@ private:
   int exchanges_ = 0;
 };
 
+struct ConceptualTopology {
+  int rank;
+  int rows;
+  int cols;
+  int row;
+  int col;
+  int north;
+  int south;
+  int east;
+  int west;
+};
+
+ConceptualTopology topology_for(int rows, int cols, int rank) {
+  const int row = rank / cols;
+  const int col = rank % cols;
+  return {
+      rank,
+      rows,
+      cols,
+      row,
+      col,
+      ((row + 1) % rows) * cols + col,
+      ((row + rows - 1) % rows) * cols + col,
+      row * cols + ((col + 1) % cols),
+      row * cols + ((col + cols - 1) % cols),
+  };
+}
+
+void check_self_copy_decisions(const ConceptualTopology& topology,
+                               bool ns_self, bool ew_self) {
+  assert(ghalo::use_local_copy_for_exchange_segment(
+             topology.rank, topology.south, topology.north) == ns_self);
+  assert(ghalo::use_local_copy_for_exchange_segment(
+             topology.rank, topology.north, topology.south) == ns_self);
+  assert(ghalo::use_local_copy_for_exchange_segment(
+             topology.rank, topology.west, topology.east) == ew_self);
+  assert(ghalo::use_local_copy_for_exchange_segment(
+             topology.rank, topology.east, topology.west) == ew_self);
+}
+
+void test_self_copy_topologies() {
+  check_self_copy_decisions(topology_for(1, 1, 0), true, true);
+
+  check_self_copy_decisions(topology_for(1, 2, 0), true, false);
+  check_self_copy_decisions(topology_for(1, 2, 1), true, false);
+
+  for (int rank = 0; rank < 4; ++rank) {
+    check_self_copy_decisions(topology_for(2, 2, rank), false, false);
+  }
+}
+
 } // namespace
 
 int main() {
+  test_self_copy_topologies();
+
   MockBackend backend;
   ghalo::BenchmarkConfig config;
   config.halo_lengths = {2};
