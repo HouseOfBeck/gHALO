@@ -154,6 +154,14 @@ GHALO_SYSTEM_NAME=frontier scripts/build.sh --backend mpi
 GHALO_SYSTEM_NAME=frontier scripts/run.sh --backend mpi --nodes 1 --ranks 4
 ```
 
+Borg, Frontier's hot-spare cabinet, is supported as a first-class system
+profile. Borg runs write results under `results/borg/` and reuse compatible
+Frontier build trees by default:
+
+```sh
+GHALO_SYSTEM_NAME=borg scripts/run.sh --backend mpi-hip --nodes 1 --ranks 4 --validate
+```
+
 The `mpi-hip` backend also supports optional diagnostic phase timing:
 
 ```sh

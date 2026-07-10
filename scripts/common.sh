@@ -69,6 +69,44 @@ ghalo_build_dir() {
   printf '%s/builds/%s/%s\n' "${root}" "${system}" "${backend}"
 }
 
+ghalo_binary_path() {
+  local root="$1"
+  local build_system="$2"
+  local backend="$3"
+  printf '%s/ghalo\n' "$(ghalo_build_dir "${root}" "${build_system}" "${backend}")"
+}
+
+ghalo_require_binary() {
+  local binary="$1"
+  local active_system="$2"
+  local build_system="$3"
+  local backend="$4"
+  [[ -x "${binary}" ]] ||
+    ghalo_die "missing executable '${binary}' for active system '${active_system}' using build system '${build_system}'. Build it first with scripts/build.sh --system ${build_system} --backend ${backend}, or set GHALO_USE_NATIVE_BUILD=1 to use a native ${active_system} build."
+}
+
+ghalo_write_system_resolution() {
+  local output="$1"
+  local active_system="$2"
+  local build_system="$3"
+  local backend="$4"
+  local binary="$5"
+  {
+    printf 'active_system=%s\n' "${active_system}"
+    printf 'build_system=%s\n' "${build_system}"
+    printf 'backend=%s\n' "${backend}"
+    printf 'binary=%s\n' "${binary}"
+  } >"${output}"
+}
+
+ghalo_system_build_alias() {
+  if [[ -n "${GHALO_BUILD_SYSTEM_ALIAS:-}" ]]; then
+    printf '%s\n' "${GHALO_BUILD_SYSTEM_ALIAS}"
+  else
+    printf '%s\n' "${GHALO_ACTIVE_SYSTEM:-}"
+  fi
+}
+
 ghalo_capture_modules() {
   local output="$1"
   if command -v module >/dev/null 2>&1; then
@@ -103,6 +141,8 @@ ghalo_capture_environment() {
     printf '\n# Relevant MPI/HIP/ROCm variables\n'
     for name in \
       GHALO_SYSTEM_NAME \
+      GHALO_BUILD_SYSTEM_ALIAS \
+      GHALO_USE_NATIVE_BUILD \
       MPICH_DIR \
       MPICH_GPU_SUPPORT_ENABLED \
       MPI_HOME \

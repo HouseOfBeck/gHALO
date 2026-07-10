@@ -114,15 +114,19 @@ system="$(ghalo_resolve_system "${requested_system}")"
 ghalo_validate_system_name "${system}"
 ghalo_load_system_config "${root}" "${system}"
 
-build_dir="$(ghalo_build_dir "${root}" "${system}" "${backend}")"
-binary="${build_dir}/ghalo"
-[[ -x "${binary}" ]] ||
-  ghalo_die "missing executable '${binary}'. Build it first with scripts/build.sh --backend ${backend}."
+export GHALO_ACTIVE_SYSTEM="${system}"
+export GHALO_ACTIVE_BACKEND="${backend}"
+build_system="$(ghalo_system_build_alias "${backend}")"
+ghalo_validate_system_name "${build_system}"
+
+build_dir="$(ghalo_build_dir "${root}" "${build_system}" "${backend}")"
+binary="$(ghalo_binary_path "${root}" "${build_system}" "${backend}")"
+ghalo_require_binary "${binary}" "${system}" "${build_system}" "${backend}"
 
 if [[ -f "${build_dir}/build-info/system.txt" ]]; then
   built_system="$(<"${build_dir}/build-info/system.txt")"
-  [[ "${built_system}" == "${system}" ]] ||
-    ghalo_die "build directory system mismatch: expected ${system}, found ${built_system}"
+  [[ "${built_system}" == "${build_system}" ]] ||
+    ghalo_die "build directory system mismatch: expected ${build_system}, found ${built_system}"
 fi
 if [[ -f "${build_dir}/build-info/backend.txt" ]]; then
   built_backend="$(<"${build_dir}/build-info/backend.txt")"
@@ -130,8 +134,6 @@ if [[ -f "${build_dir}/build-info/backend.txt" ]]; then
     ghalo_die "build directory backend mismatch: expected ${backend}, found ${built_backend}"
 fi
 
-export GHALO_ACTIVE_SYSTEM="${system}"
-export GHALO_ACTIVE_BACKEND="${backend}"
 ghalo_system_setup_run "${backend}"
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -167,6 +169,8 @@ mapfile -t launch_command < <(
 
 printf '%q ' "${launch_command[@]}" >"${result_dir}/command.txt"
 printf '\n' >>"${result_dir}/command.txt"
+ghalo_write_system_resolution "${result_dir}/system-resolution.txt" \
+  "${system}" "${build_system}" "${backend}" "${binary}"
 
 ghalo_capture_modules "${result_dir}/modules.txt"
 ghalo_capture_environment "${result_dir}/environment.txt"

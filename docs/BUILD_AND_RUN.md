@@ -158,6 +158,7 @@ modules.txt
 slurm-job.txt
 stderr.txt
 stdout.txt
+system-resolution.txt
 ```
 
 The current gHALO CLI supports `--csv` and `--json`, so the workflow writes
@@ -167,6 +168,39 @@ benchmark without pipelines and returns the benchmark exit status.
 To prevent accidental cross-use of binaries, `run.sh` checks build metadata
 when available and ensures the selected binary comes from the expected
 `builds/<system>/<backend>/` directory.
+
+### Build Aliases
+
+Most systems use the active system name for both results and binaries:
+
+```text
+active system: <system>
+build system:  <system>
+binary:        builds/<system>/<backend>/ghalo
+results:       results/<system>/
+```
+
+A system profile may define a build alias when two systems share compatible
+hardware, software, and filesystems. In that case, `run.sh` still writes results
+under the active system, but resolves the binary from the aliased build system:
+
+```text
+active system: borg
+build system:  frontier
+binary:        builds/frontier/<backend>/ghalo
+results:       results/borg/
+```
+
+Each run records this resolution in:
+
+```text
+system-resolution.txt
+```
+
+with fields for `active_system`, `build_system`, `backend`, and `binary`.
+
+Profiles may honor `GHALO_BUILD_SYSTEM_ALIAS=<name>` for explicit aliasing and
+`GHALO_USE_NATIVE_BUILD=1` to force the active system's own build tree.
 
 ## System Configuration Interface
 
@@ -252,6 +286,88 @@ The run script can be used inside an existing Slurm allocation or from a batch
 script. Batch scripts should request the nodes, time, account, and job
 resources; `scripts/run.sh` should be responsible for constructing the gHALO
 launch command within that allocation.
+
+## Borg
+
+Borg is a Frontier hot-spare cabinet. Borg compute blades are
+hardware-identical to Frontier compute blades, and Borg shares the same NFS
+filesystem as Frontier. Because the hardware, filesystem, Cray programming
+environment, Cray MPICH, and `gfx90a` GPU target are compatible, the Borg
+profile reuses Frontier build trees by default:
+
+```text
+builds/frontier/mpi/ghalo
+builds/frontier/mpi-hip/ghalo
+results/borg/<timestamp>_mpi_<label>/
+results/borg/<timestamp>_mpi-hip_<label>/
+```
+
+This keeps Frontier and Borg result histories separate while avoiding duplicate
+builds for identical binaries.
+
+Borg CPU MPI smoke run:
+
+```sh
+GHALO_SYSTEM_NAME=borg scripts/run.sh \
+  --backend mpi \
+  --nodes 1 \
+  --ranks 4 \
+  --ranks-per-node 4 \
+  --target-seconds 0.1 \
+  --label smoke
+```
+
+Borg MPI-HIP smoke run:
+
+```sh
+GHALO_SYSTEM_NAME=borg scripts/run.sh \
+  --backend mpi-hip \
+  --nodes 1 \
+  --ranks 4 \
+  --ranks-per-node 4 \
+  --target-seconds 0.1 \
+  --validate \
+  --label smoke
+```
+
+Borg phase-timing baseline:
+
+```sh
+GHALO_SYSTEM_NAME=borg scripts/run.sh \
+  --backend mpi-hip \
+  --nodes 1 \
+  --ranks 4 \
+  --ranks-per-node 4 \
+  --target-seconds 3 \
+  --validate \
+  --phase-timing \
+  --label phase-baseline
+```
+
+The Borg profile:
+
+- uses the Cray C++ wrapper `CC`;
+- uses `srun` with `-N`, `-n`, and `--ntasks-per-node` when supplied;
+- uses `gfx90a` for HIP builds;
+- loads `craype-accel-amd-gfx90a` and `rocm/6.2.4` for `mpi-hip`;
+- sets `MPICH_GPU_SUPPORT_ENABLED=1` only for `mpi-hip`;
+- unsets `MPICH_GPU_SUPPORT_ENABLED` for CPU MPI;
+- avoids unvalidated GPU-binding options;
+- does not hard-code Cray MPICH paths.
+
+To create Borg-native builds instead of using Frontier builds:
+
+```sh
+GHALO_SYSTEM_NAME=borg scripts/build.sh --backend mpi
+GHALO_SYSTEM_NAME=borg scripts/build.sh --backend mpi-hip
+GHALO_USE_NATIVE_BUILD=1 GHALO_SYSTEM_NAME=borg scripts/run.sh --backend mpi-hip
+```
+
+With `GHALO_USE_NATIVE_BUILD=1`, Borg runs resolve binaries from:
+
+```text
+builds/borg/<backend>/ghalo
+```
 
 ## Repository Hygiene
 
