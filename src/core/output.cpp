@@ -53,11 +53,38 @@ void write_console(std::ostream& out,
   }
 
   const auto& topo = results.front().topology;
+  const auto& metadata = results.front().metadata;
   out << "gHALO " << version << "\n";
   out << "Backend: " << results.front().backend << "\n";
   out << "Algorithm: " << results.front().algorithm << "\n";
+  out << "Memory: " << metadata.memory_location << "\n";
+  if (!metadata.hip_runtime_version.empty()) {
+    out << "HIP runtime: " << metadata.hip_runtime_version << "\n";
+  }
   out << "Ranks: " << topo.world_size << " as a " << topo.rows << " x "
       << topo.cols << " periodic Cartesian grid\n\n";
+
+  if (!metadata.ranks.empty()) {
+    out << "Rank mapping summary:\n";
+    if (metadata.ranks.size() <= 16) {
+      for (const auto& rank : metadata.ranks) {
+        out << "  rank " << rank.world_rank << " local " << rank.local_rank
+            << " host " << rank.hostname;
+        if (rank.hip_device_index >= 0) {
+          out << " hip_device " << rank.hip_device_index << " ("
+              << rank.hip_device_name << ")";
+        }
+        if (!rank.rocr_visible_devices.empty()) {
+          out << " ROCR_VISIBLE_DEVICES=" << rank.rocr_visible_devices;
+        }
+        out << " cart=(" << rank.row << "," << rank.col << ")\n";
+      }
+    } else {
+      out << "  " << metadata.ranks.size()
+          << " ranks; full rank mapping is available in JSON output\n";
+    }
+    out << "\n";
+  }
 
   out << std::setw(8) << "N" << std::setw(14) << "iters" << std::setw(18)
       << "max avg seconds" << std::setw(14) << "bytes/rank" << "\n";
@@ -81,7 +108,9 @@ void write_csv(const std::string& path,
          "word_bytes,n_message_bytes,two_n_message_bytes,"
          "total_exchange_bytes_per_rank,iterations,max_total_seconds,"
          "max_average_seconds,root_world_rank,root_cart_rank,root_row,"
-         "root_col,root_north,root_south,root_east,root_west\n";
+         "root_col,root_north,root_south,root_east,root_west,"
+         "memory_location,mpi_library_version,hip_runtime_version,"
+         "validation_enabled,validation_passed\n";
 
   out << std::scientific << std::setprecision(12);
   for (const auto& result : results) {
@@ -96,7 +125,14 @@ void write_csv(const std::string& path,
         << ',' << result.topology.cart_rank << ',' << result.topology.row
         << ',' << result.topology.col << ',' << result.topology.north << ','
         << result.topology.south << ',' << result.topology.east << ','
-        << result.topology.west << '\n';
+        << result.topology.west << ',' << result.metadata.memory_location
+        << ',';
+    write_json_string(out, result.metadata.mpi_library_version);
+    out << ',';
+    write_json_string(out, result.metadata.hip_runtime_version);
+    out << ',' << (result.metadata.validation_enabled ? "true" : "false")
+        << ',' << (result.metadata.validation_passed ? "true" : "false")
+        << '\n';
   }
 }
 
@@ -132,6 +168,50 @@ void write_json(const std::string& path,
     out << "      \"max_total_seconds\": " << r.max_total_seconds << ",\n";
     out << "      \"max_average_seconds\": " << r.max_average_seconds
         << ",\n";
+    out << "      \"metadata\": {\n";
+    out << "        \"memory_location\": ";
+    write_json_string(out, r.metadata.memory_location);
+    out << ",\n";
+    out << "        \"mpi_library_version\": ";
+    write_json_string(out, r.metadata.mpi_library_version);
+    out << ",\n";
+    out << "        \"hip_runtime_version\": ";
+    write_json_string(out, r.metadata.hip_runtime_version);
+    out << ",\n";
+    out << "        \"device_map\": ";
+    write_json_string(out, r.metadata.device_map);
+    out << ",\n";
+    out << "        \"gpu_aware_mpi_requested\": "
+        << (r.metadata.gpu_aware_mpi_requested ? "true" : "false") << ",\n";
+    out << "        \"validation_enabled\": "
+        << (r.metadata.validation_enabled ? "true" : "false") << ",\n";
+    out << "        \"validation_passed\": "
+        << (r.metadata.validation_passed ? "true" : "false") << ",\n";
+    out << "        \"ranks\": [\n";
+    for (std::size_t j = 0; j < r.metadata.ranks.size(); ++j) {
+      const auto& rank = r.metadata.ranks[j];
+      out << "          {\n";
+      out << "            \"global_rank\": " << rank.world_rank << ",\n";
+      out << "            \"local_rank\": " << rank.local_rank << ",\n";
+      out << "            \"hostname\": ";
+      write_json_string(out, rank.hostname);
+      out << ",\n";
+      out << "            \"hip_device_index\": " << rank.hip_device_index
+          << ",\n";
+      out << "            \"hip_device_name\": ";
+      write_json_string(out, rank.hip_device_name);
+      out << ",\n";
+      out << "            \"rocr_visible_devices\": ";
+      write_json_string(out, rank.rocr_visible_devices);
+      out << ",\n";
+      out << "            \"cart_rank\": " << rank.cart_rank << ",\n";
+      out << "            \"cartesian_coordinates\": [" << rank.row << ", "
+          << rank.col << "]\n";
+      out << "          }" << (j + 1 == r.metadata.ranks.size() ? "" : ",")
+          << "\n";
+    }
+    out << "        ]\n";
+    out << "      },\n";
     out << "      \"topology\": {\n";
     out << "        \"world_size\": " << r.topology.world_size << ",\n";
     out << "        \"world_rank\": " << r.topology.world_rank << ",\n";

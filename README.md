@@ -132,6 +132,7 @@ Future feature gates:
 
 ```sh
 cmake -S . -B build -DGHALO_ENABLE_HIP=ON
+cmake -S . -B build -DGHALO_ENABLE_MPI=ON -DGHALO_ENABLE_HIP=ON -DGHALO_ENABLE_MPI_HIP=ON
 cmake -S . -B build -DGHALO_ENABLE_RCCL=ON
 cmake -S . -B build -DGHALO_ENABLE_UCX=ON
 ```
@@ -162,6 +163,7 @@ gHALO values:
 - [Versioning](docs/VERSIONING.md)
 - [Historical Context](docs/HISTORY.md)
 - [Version 0 Design](docs/VERSION_0_DESIGN.md)
+- [GPU-Aware MPI Design](docs/GPU_AWARE_MPI_DESIGN.md)
 
 ## Contributing
 

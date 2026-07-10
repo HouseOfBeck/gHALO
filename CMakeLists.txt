@@ -16,9 +16,18 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(GHALO_ENABLE_HIP "Enable HIP language support for GPU kernels" OFF)
 option(GHALO_ENABLE_MPI "Enable MPI support for distributed halo exchange" OFF)
+option(GHALO_ENABLE_MPI_HIP "Enable GPU-aware MPI backend using HIP device buffers" OFF)
 option(GHALO_ENABLE_RCCL "Enable RCCL communication backend support" OFF)
 option(GHALO_ENABLE_UCX "Enable UCX communication backend support" OFF)
 option(GHALO_ENABLE_WARNINGS "Enable project warning flags where supported" ON)
+
+if(GHALO_ENABLE_MPI_HIP AND NOT GHALO_ENABLE_MPI)
+  message(FATAL_ERROR "GHALO_ENABLE_MPI_HIP requires GHALO_ENABLE_MPI=ON")
+endif()
+
+if(GHALO_ENABLE_MPI_HIP AND NOT GHALO_ENABLE_HIP)
+  message(FATAL_ERROR "GHALO_ENABLE_MPI_HIP requires GHALO_ENABLE_HIP=ON")
+endif()
 
 add_library(ghalo_project_options INTERFACE)
 target_compile_features(ghalo_project_options INTERFACE cxx_std_20)
@@ -34,7 +43,10 @@ endif()
 
 if(GHALO_ENABLE_HIP)
   enable_language(HIP)
-  find_package(hip REQUIRED)
+  find_package(hip REQUIRED CONFIG)
+  set(CMAKE_HIP_STANDARD 20)
+  set(CMAKE_HIP_STANDARD_REQUIRED ON)
+  set(CMAKE_HIP_EXTENSIONS OFF)
 endif()
 
 if(GHALO_ENABLE_MPI)
@@ -52,12 +64,9 @@ endif()
 message(STATUS "gHALO configuration")
 message(STATUS "  HIP:  ${GHALO_ENABLE_HIP}")
 message(STATUS "  MPI:  ${GHALO_ENABLE_MPI}")
+message(STATUS "  MPI+HIP: ${GHALO_ENABLE_MPI_HIP}")
 message(STATUS "  RCCL: ${GHALO_ENABLE_RCCL}")
 message(STATUS "  UCX:  ${GHALO_ENABLE_UCX}")
-
-if(BUILD_TESTING)
-  add_subdirectory(tests)
-endif()
 
 add_library(
   ghalo_core
@@ -85,8 +94,36 @@ if(GHALO_ENABLE_MPI)
       ${CMAKE_CURRENT_SOURCE_DIR}/src/backends/mpi
   )
 
+  if(GHALO_ENABLE_MPI_HIP)
+    add_library(ghalo_mpi_hip_backend src/backends/mpi_hip/mpi_hip_backend.hip)
+    target_link_libraries(
+      ghalo_mpi_hip_backend
+      PUBLIC
+        ghalo_core
+        MPI::MPI_CXX
+    )
+    if(TARGET hip::host)
+      target_link_libraries(ghalo_mpi_hip_backend PUBLIC hip::host)
+    elseif(TARGET hip::device)
+      target_link_libraries(ghalo_mpi_hip_backend PUBLIC hip::device)
+    endif()
+    target_include_directories(
+      ghalo_mpi_hip_backend
+      PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/backends/mpi_hip
+    )
+  endif()
+
   add_executable(ghalo src/app/main.cpp)
   target_link_libraries(ghalo PRIVATE ghalo_mpi_backend)
+  if(GHALO_ENABLE_MPI_HIP)
+    target_link_libraries(ghalo PRIVATE ghalo_mpi_hip_backend)
+    target_compile_definitions(ghalo PRIVATE GHALO_HAVE_MPI_HIP=1)
+  endif()
 else()
   message(STATUS "gHALO executable target is disabled because GHALO_ENABLE_MPI=OFF")
+endif()
+
+if(BUILD_TESTING)
+  add_subdirectory(tests)
 endif()

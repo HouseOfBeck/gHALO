@@ -1,1 +1,3 @@
-# Test targets will be added with the first implementation milestone.
+add_executable(ghalo_core_tests core_smoke.cpp)
+target_link_libraries(ghalo_core_tests PRIVATE ghalo_core)
+add_test(NAME ghalo_core_smoke COMMAND ghalo_core_tests)

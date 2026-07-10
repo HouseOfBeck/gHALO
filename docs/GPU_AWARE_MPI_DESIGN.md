@@ -1,9 +1,8 @@
 # GPU-Aware MPI Backend Design
 
-This document defines the proposed design for the next gHALO milestone:
-GPU-aware MPI on AMD GPUs using HIP. It is a design document only. It does not
-authorize changes to benchmark semantics and does not include implementation
-code.
+This document defines the design for the gHALO GPU-aware MPI milestone on AMD
+GPUs using HIP. It describes the intended architecture, validation strategy,
+and operational model for the `mpi-hip` backend.
 
 The CPU/MPI backend remains the reference backend. The GPU-aware MPI backend
 must preserve the same HALO exchange definition, topology, timing methodology,
@@ -141,6 +140,14 @@ The backend must synchronize GPU work as needed before MPI consumes a device
 buffer and before GPU work consumes an MPI receive buffer. Synchronization
 policy must be explicit and documented because it affects the measured
 application-visible communication cost.
+
+The initial implementation uses blocking device-to-device `hipMemcpy` calls for
+the simulated HALO copy steps and blocking `MPI_Sendrecv` calls for
+communication. It synchronizes explicitly after setup, validation
+initialization, and the GPU-aware MPI probe. It does not add an unconditional
+`hipDeviceSynchronize` to every timed exchange iteration, because the blocking
+copy and MPI calls already provide the ordering needed by the implemented
+steady-state path.
 
 ## HIP Responsibilities
 
@@ -363,15 +370,15 @@ Recommended options:
 ```cmake
 GHALO_ENABLE_MPI              # existing option
 GHALO_ENABLE_HIP              # existing option
-GHALO_ENABLE_GPU_AWARE_MPI    # new explicit option
+GHALO_ENABLE_MPI_HIP          # GPU-aware MPI backend using HIP device buffers
 ```
 
 Rules:
 
 - `GHALO_ENABLE_HIP=OFF` by default.
-- `GHALO_ENABLE_GPU_AWARE_MPI=OFF` by default.
-- `GHALO_ENABLE_GPU_AWARE_MPI=ON` requires `GHALO_ENABLE_MPI=ON`.
-- `GHALO_ENABLE_GPU_AWARE_MPI=ON` requires `GHALO_ENABLE_HIP=ON`.
+- `GHALO_ENABLE_MPI_HIP=OFF` by default.
+- `GHALO_ENABLE_MPI_HIP=ON` requires `GHALO_ENABLE_MPI=ON`.
+- `GHALO_ENABLE_MPI_HIP=ON` requires `GHALO_ENABLE_HIP=ON`.
 - HIP language enablement must remain gated by `GHALO_ENABLE_HIP`.
 - CMake must not hard-code ROCm paths.
 - CMake must not assume ROCm exists on macOS.
@@ -406,7 +413,7 @@ Configure and build:
 cmake -S . -B build-frontier-mpi-hip \
   -DGHALO_ENABLE_MPI=ON \
   -DGHALO_ENABLE_HIP=ON \
-  -DGHALO_ENABLE_GPU_AWARE_MPI=ON \
+  -DGHALO_ENABLE_MPI_HIP=ON \
   -DCMAKE_CXX_COMPILER=CC \
   -DCMAKE_HIP_COMPILER=amdclang++
 
@@ -500,7 +507,7 @@ Version 0 fields.
 
 ## Ordered Implementation Plan
 
-1. Add CMake option `GHALO_ENABLE_GPU_AWARE_MPI`, gated on MPI and HIP.
+1. Add CMake option `GHALO_ENABLE_MPI_HIP`, gated on MPI and HIP.
 2. Add HIP RAII helpers for device selection, error checking, and device
    buffers in HIP-only targets.
 3. Add command-line parsing for `--backend`, `--device-map`, and `--validate`

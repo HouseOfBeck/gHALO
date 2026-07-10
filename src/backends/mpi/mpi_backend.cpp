@@ -2,7 +2,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <cstdlib>
+#include <string>
+#include <unistd.h>
+#include <vector>
 
 namespace ghalo {
 namespace {
@@ -62,6 +66,7 @@ void MPIEnvironment::abort(int error_code) const {
 
 MPIBackend::MPIBackend() {
   initialize_topology();
+  initialize_metadata();
 }
 
 MPIBackend::~MPIBackend() {
@@ -75,6 +80,8 @@ std::string MPIBackend::name() const { return "MPIBackend"; }
 std::string MPIBackend::algorithm() const { return "sendrecv"; }
 
 TopologyInfo MPIBackend::topology() const { return topology_; }
+
+BackendMetadata MPIBackend::metadata() const { return metadata_; }
 
 int MPIBackend::rank() const { return topology_.world_rank; }
 
@@ -166,6 +173,75 @@ void MPIBackend::initialize_topology() {
   topology_.west = cart_rank(
       cart_comm_, topology_.row,
       (topology_.col + topology_.cols - 1) % topology_.cols);
+}
+
+void MPIBackend::initialize_metadata() {
+  metadata_.memory_location = "host";
+
+  int version_length = 0;
+  char version[MPI_MAX_LIBRARY_VERSION_STRING] = {};
+  MPI_Get_library_version(version, &version_length);
+  metadata_.mpi_library_version = std::string(version, version_length);
+
+  MPI_Comm local_comm = MPI_COMM_NULL;
+  MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL,
+                      &local_comm);
+
+  int local_rank = 0;
+  MPI_Comm_rank(local_comm, &local_rank);
+
+  char hostname[256] = {};
+  if (gethostname(hostname, sizeof(hostname) - 1) != 0) {
+    std::snprintf(hostname, sizeof(hostname), "unknown");
+  }
+
+  constexpr int hostname_length = 256;
+  std::vector<char> hostnames(static_cast<std::size_t>(topology_.world_size) *
+                             hostname_length);
+  MPI_Allgather(hostname, hostname_length, MPI_CHAR, hostnames.data(),
+                hostname_length, MPI_CHAR, MPI_COMM_WORLD);
+
+  RankMetadata local;
+  local.world_rank = topology_.world_rank;
+  local.local_rank = local_rank;
+  local.cart_rank = topology_.cart_rank;
+  local.row = topology_.row;
+  local.col = topology_.col;
+
+  struct PackedRank {
+    int world_rank;
+    int local_rank;
+    int cart_rank;
+    int row;
+    int col;
+    int hip_device_index;
+  };
+
+  PackedRank packed{local.world_rank, local.local_rank, local.cart_rank,
+                    local.row,        local.col,        local.hip_device_index};
+  std::vector<PackedRank> packed_ranks(topology_.world_size);
+  MPI_Allgather(&packed, static_cast<int>(sizeof(PackedRank)), MPI_BYTE,
+                packed_ranks.data(), static_cast<int>(sizeof(PackedRank)),
+                MPI_BYTE, MPI_COMM_WORLD);
+
+  metadata_.ranks.clear();
+  metadata_.ranks.reserve(static_cast<std::size_t>(topology_.world_size));
+  for (int i = 0; i < topology_.world_size; ++i) {
+    RankMetadata rank;
+    rank.world_rank = packed_ranks[static_cast<std::size_t>(i)].world_rank;
+    rank.local_rank = packed_ranks[static_cast<std::size_t>(i)].local_rank;
+    rank.cart_rank = packed_ranks[static_cast<std::size_t>(i)].cart_rank;
+    rank.row = packed_ranks[static_cast<std::size_t>(i)].row;
+    rank.col = packed_ranks[static_cast<std::size_t>(i)].col;
+    rank.hip_device_index =
+        packed_ranks[static_cast<std::size_t>(i)].hip_device_index;
+    rank.hostname =
+        std::string(hostnames.data() + static_cast<std::size_t>(i) *
+                                         hostname_length);
+    metadata_.ranks.push_back(rank);
+  }
+
+  MPI_Comm_free(&local_comm);
 }
 
 } // namespace ghalo

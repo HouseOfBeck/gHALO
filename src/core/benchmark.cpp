@@ -66,6 +66,7 @@ std::vector<BenchmarkResult> run_benchmark(Backend& backend,
     result.max_total_seconds = measured_max;
     result.max_average_seconds = measured_max / static_cast<double>(iterations);
     result.topology = backend.topology();
+    result.metadata = backend.metadata();
     results.push_back(result);
   }
 

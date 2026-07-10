@@ -26,6 +26,7 @@ struct BenchmarkResult {
   double max_average_seconds{};
   double max_total_seconds{};
   TopologyInfo topology;
+  BackendMetadata metadata;
 };
 
 std::vector<BenchmarkResult> run_benchmark(Backend& backend,

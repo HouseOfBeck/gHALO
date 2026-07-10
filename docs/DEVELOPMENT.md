@@ -32,7 +32,7 @@ Examples:
 ```sh
 cmake -S . -B build-hip -DGHALO_ENABLE_HIP=ON
 cmake -S . -B build-mpi -DGHALO_ENABLE_MPI=ON
-cmake -S . -B build-gpu-mpi -DGHALO_ENABLE_HIP=ON -DGHALO_ENABLE_MPI=ON
+cmake -S . -B build-gpu-mpi -DGHALO_ENABLE_MPI=ON -DGHALO_ENABLE_HIP=ON -DGHALO_ENABLE_MPI_HIP=ON
 ```
 
 The exact compiler wrappers, module names, and scheduler commands are expected
@@ -51,6 +51,32 @@ srun -n 16 ./build-frontier/ghalo --csv ghalo.csv --json ghalo.json
 ```
 
 Version 0 does not require ROCm or HIP.
+
+## Frontier GPU-Aware MPI Build
+
+For the HIP device-buffer MPI backend on Frontier, load the accelerator and
+ROCm modules and enable GPU-aware Cray MPICH before configuring:
+
+```sh
+module load craype-accel-amd-gfx90a
+module load rocm
+export MPICH_GPU_SUPPORT_ENABLED=1
+
+cmake -S . -B build-frontier-mpi-hip \
+  -DGHALO_ENABLE_MPI=ON \
+  -DGHALO_ENABLE_HIP=ON \
+  -DGHALO_ENABLE_MPI_HIP=ON \
+  -DCMAKE_CXX_COMPILER=CC
+
+cmake --build build-frontier-mpi-hip
+srun -N 1 -n 4 --ntasks-per-gpu=1 \
+  ./build-frontier-mpi-hip/ghalo \
+  --backend mpi-hip \
+  --target-seconds 0.1
+```
+
+Validation is enabled by default for `mpi-hip`. Use `--no-validate` only after
+the backend has been validated on the target system.
 
 ## CMake Policy
 

@@ -20,6 +20,29 @@ struct TopologyInfo {
   int west{};
 };
 
+struct RankMetadata {
+  int world_rank{};
+  int local_rank{-1};
+  int cart_rank{};
+  int row{};
+  int col{};
+  int hip_device_index{-1};
+  std::string hostname;
+  std::string hip_device_name;
+  std::string rocr_visible_devices;
+};
+
+struct BackendMetadata {
+  std::string mpi_library_version;
+  std::string hip_runtime_version;
+  std::string memory_location = "host";
+  std::string device_map;
+  bool gpu_aware_mpi_requested = false;
+  bool validation_enabled = false;
+  bool validation_passed = false;
+  std::vector<RankMetadata> ranks;
+};
+
 class Backend {
 public:
   virtual ~Backend() = default;
@@ -27,6 +50,7 @@ public:
   virtual std::string name() const = 0;
   virtual std::string algorithm() const = 0;
   virtual TopologyInfo topology() const = 0;
+  virtual BackendMetadata metadata() const { return {}; }
 
   virtual int rank() const = 0;
   virtual int size() const = 0;

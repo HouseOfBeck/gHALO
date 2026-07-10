@@ -33,6 +33,7 @@ public:
   std::string name() const override;
   std::string algorithm() const override;
   TopologyInfo topology() const override;
+  BackendMetadata metadata() const override;
 
   int rank() const override;
   int size() const override;
@@ -46,9 +47,11 @@ public:
 
 private:
   void initialize_topology();
+  void initialize_metadata();
 
   MPI_Comm cart_comm_ = MPI_COMM_NULL;
   TopologyInfo topology_{};
+  BackendMetadata metadata_{};
   std::size_t halo_words_ = 0;
   std::vector<float> hins_;
   std::vector<float> hons_;
