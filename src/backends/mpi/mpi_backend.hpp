@@ -10,9 +10,21 @@
 
 namespace ghalo {
 
+class MPIEnvironment final {
+public:
+  MPIEnvironment(int& argc, char**& argv);
+  ~MPIEnvironment();
+
+  MPIEnvironment(const MPIEnvironment&) = delete;
+  MPIEnvironment& operator=(const MPIEnvironment&) = delete;
+
+  int rank() const;
+  void abort(int error_code) const;
+};
+
 class MPIBackend final : public Backend {
 public:
-  MPIBackend(int& argc, char**& argv);
+  MPIBackend();
   ~MPIBackend() override;
 
   MPIBackend(const MPIBackend&) = delete;

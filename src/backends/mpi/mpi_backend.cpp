@@ -37,8 +37,30 @@ int cart_rank(MPI_Comm comm, int row, int col) {
 
 } // namespace
 
-MPIBackend::MPIBackend(int& argc, char**& argv) {
+MPIEnvironment::MPIEnvironment(int& argc, char**& argv) {
   MPI_Init(&argc, &argv);
+}
+
+MPIEnvironment::~MPIEnvironment() {
+  int finalized = 0;
+  MPI_Finalized(&finalized);
+  if (!finalized) {
+    MPI_Finalize();
+  }
+}
+
+int MPIEnvironment::rank() const {
+  int rank = 0;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  return rank;
+}
+
+void MPIEnvironment::abort(int error_code) const {
+  MPI_Abort(MPI_COMM_WORLD, error_code);
+  std::abort();
+}
+
+MPIBackend::MPIBackend() {
   initialize_topology();
 }
 
@@ -46,7 +68,6 @@ MPIBackend::~MPIBackend() {
   if (cart_comm_ != MPI_COMM_NULL) {
     MPI_Comm_free(&cart_comm_);
   }
-  MPI_Finalize();
 }
 
 std::string MPIBackend::name() const { return "MPIBackend"; }

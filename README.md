@@ -120,6 +120,14 @@ Example MPI run:
 srun -n 16 ./build-mpi/ghalo --csv ghalo.csv --json ghalo.json
 ```
 
+Version 0 smoke test:
+
+```sh
+cmake -S . -B build -DGHALO_ENABLE_MPI=ON
+cmake --build build
+mpirun -np 4 ./build/ghalo --target-seconds 0.1
+```
+
 Future feature gates:
 
 ```sh

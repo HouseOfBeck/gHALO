@@ -5,7 +5,6 @@
 #include "mpi_backend.hpp"
 
 #include <exception>
-#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -16,6 +15,7 @@ struct CliOptions {
   std::string csv_path = "ghalo.csv";
   std::string json_path = "ghalo.json";
   double target_seconds = 3.0;
+  bool show_help = false;
 };
 
 void print_usage(std::ostream& out) {
@@ -27,8 +27,8 @@ CliOptions parse_args(int argc, char** argv) {
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
     if (arg == "--help" || arg == "-h") {
-      print_usage(std::cout);
-      std::exit(0);
+      options.show_help = true;
+      return options;
     }
     if (arg == "--csv" && i + 1 < argc) {
       options.csv_path = argv[++i];
@@ -46,9 +46,18 @@ CliOptions parse_args(int argc, char** argv) {
 } // namespace
 
 int main(int argc, char** argv) {
+  ghalo::MPIEnvironment mpi(argc, argv);
+
   try {
     auto options = parse_args(argc, argv);
-    ghalo::MPIBackend backend(argc, argv);
+    if (options.show_help) {
+      if (mpi.rank() == 0) {
+        print_usage(std::cout);
+      }
+      return 0;
+    }
+
+    ghalo::MPIBackend backend;
 
     ghalo::BenchmarkConfig config;
     config.target_seconds = options.target_seconds;
@@ -61,8 +70,13 @@ int main(int argc, char** argv) {
       ghalo::write_json(options.json_path, results);
     }
   } catch (const std::exception& error) {
-    std::cerr << "gHALO error: " << error.what() << '\n';
-    return 1;
+    std::cerr << "gHALO error on rank " << mpi.rank() << ": " << error.what()
+              << '\n';
+    mpi.abort(1);
+  } catch (...) {
+    std::cerr << "gHALO error on rank " << mpi.rank()
+              << ": unknown exception\n";
+    mpi.abort(1);
   }
 
   return 0;
