@@ -102,6 +102,16 @@ if(GHALO_ENABLE_MPI)
         ghalo_core
         MPI::MPI_CXX
     )
+    target_include_directories(
+      ghalo_mpi_hip_backend
+      PRIVATE
+        ${MPI_CXX_INCLUDE_DIRS}
+    )
+    target_compile_options(
+      ghalo_mpi_hip_backend
+      PRIVATE
+        ${MPI_CXX_COMPILE_OPTIONS}
+    )
     if(TARGET hip::host)
       target_link_libraries(ghalo_mpi_hip_backend PUBLIC hip::host)
     elseif(TARGET hip::device)
