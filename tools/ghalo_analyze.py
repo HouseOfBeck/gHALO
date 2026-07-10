@@ -74,20 +74,19 @@ class Run:
 
     @property
     def label(self) -> str:
-        parent_label = self.result_path.name if self.result_path.is_dir() else ""
-        system = self.meta_value("active_system") or self.system
-        backend = self.backend
+        system = display_system(self.system)
         nodes = self.nodes
         ranks = self.ranks
-        if parent_label and parent_label not in ("", "."):
-            return parent_label
-        if system or backend or nodes or ranks:
-            parts = [part for part in (system, backend) if part]
+        if system or nodes or ranks:
+            parts = [system] if system else []
             if nodes is not None:
-                parts.append(f"{nodes}n")
+                parts.append(plural(nodes, "node"))
             if ranks is not None:
-                parts.append(f"{ranks}r")
-            return "-".join(parts)
+                rank_kind = "GPU rank" if self.memory_location == "device" else "rank"
+                parts.append(plural(ranks, rank_kind))
+            if "repeat" in self.result_path.name.lower():
+                parts.append("repeat")
+            return " | ".join(parts)
         return self.input_path.name
 
     @property
@@ -201,6 +200,26 @@ def infer_system_from_path(path: Path) -> str:
         if index + 1 < len(parts):
             return parts[index + 1]
     return ""
+
+
+def display_system(system: str) -> str:
+    if not system:
+        return ""
+    known = {"frontier": "Frontier", "borg": "Borg"}
+    return known.get(system.lower(), system)
+
+
+def display_backend(backend: str) -> str:
+    if "hip" in backend.lower():
+        return "MPI-HIP"
+    if "mpi" in backend.lower():
+        return "MPI"
+    return backend
+
+
+def plural(count: int, unit: str) -> str:
+    suffix = "" if count == 1 else "s"
+    return f"{count} {unit}{suffix}"
 
 
 def parse_metadata_text(text: str) -> Dict[str, str]:
@@ -656,6 +675,31 @@ def configuration_differences(a: Run, b: Run) -> Dict[str, Tuple[Any, Any]]:
     }
 
 
+def label_overrides(args: argparse.Namespace, count: int) -> List[Optional[str]]:
+    labels: List[str] = []
+    for value in getattr(args, "label", None) or []:
+        labels.append(value)
+    comma_labels = getattr(args, "labels", None)
+    if comma_labels:
+        labels.extend(label.strip() for label in comma_labels.split(","))
+    if labels and len(labels) != count:
+        raise AnalysisError(
+            f"received {len(labels)} label override(s) for {count} input run(s)"
+        )
+    return labels or [None for _ in range(count)]
+
+
+def run_labels(runs: Sequence[Run], overrides: Sequence[Optional[str]]) -> List[str]:
+    labels = [override or run.label for run, override in zip(runs, overrides)]
+    seen: Dict[str, int] = {}
+    unique = []
+    for label in labels:
+        count = seen.get(label, 0)
+        seen[label] = count + 1
+        unique.append(label if count == 0 else f"{label} | repeat {count + 1}")
+    return unique
+
+
 def compare_rows(a: Run, b: Run, allow_missing: bool = False) -> List[Dict[str, Any]]:
     a_results = results_by_halo(a)
     b_results = results_by_halo(b)
@@ -749,6 +793,41 @@ def grouping_key(run: Run, group_by: Sequence[str]) -> Tuple[Any, ...]:
     return tuple(values)
 
 
+def aggregate_group_metadata(run: Run, key: Tuple[Any, ...], group_by: Sequence[str]) -> Dict[str, Any]:
+    if group_by:
+        metadata = {
+            f"group_{name}": value for name, value in zip(group_by, key)
+        }
+        label_parts = []
+        for name, value in zip(group_by, key):
+            if value in (None, ""):
+                continue
+            if name == "system":
+                label_parts.append(display_system(str(value)))
+            elif name == "nodes":
+                label_parts.append(plural(int(value), "node"))
+            elif name == "ranks":
+                label_parts.append(plural(int(value), "rank"))
+            else:
+                label_parts.append(str(value))
+        metadata["group"] = " | ".join(label_parts) if label_parts else "all runs"
+        return metadata
+
+    bytes_by_halo = ";".join(
+        f"N={result.halo_words}:{result.total_exchange_bytes_per_rank}B/rank"
+        for result in sorted(run.results, key=lambda item: item.halo_words)
+    )
+    return {
+        "group": run.label,
+        "group_backend": run.backend,
+        "group_ranks": run.ranks if run.ranks is not None else "",
+        "group_nodes": run.nodes if run.nodes is not None else "",
+        "group_cartesian_dimensions": run.cartesian,
+        "group_phase_timing_enabled": run.phase_timing_enabled,
+        "group_bytes_per_rank_by_halo": bytes_by_halo,
+    }
+
+
 def aggregate_rows(runs: List[Run], allow_mixed: bool, group_by: Sequence[str]) -> List[Dict[str, Any]]:
     groups: Dict[Tuple[Any, ...], List[Run]] = {}
     for run in runs:
@@ -759,6 +838,7 @@ def aggregate_rows(runs: List[Run], allow_mixed: bool, group_by: Sequence[str]) 
 
     rows: List[Dict[str, Any]] = []
     for key, group_runs in groups.items():
+        group_metadata = aggregate_group_metadata(group_runs[0], key, group_by)
         halos = sorted({result.halo_words for run in group_runs for result in run.results})
         for halo in halos:
             values = [results_by_halo(run)[halo].max_average_seconds for run in group_runs if halo in results_by_halo(run)]
@@ -766,7 +846,7 @@ def aggregate_rows(runs: List[Run], allow_mixed: bool, group_by: Sequence[str]) 
                 continue
             mean = statistics.fmean(values)
             row = {
-                "group": ",".join("" if item is None else str(item) for item in key),
+                **group_metadata,
                 "halo_words": halo,
                 "count": len(values),
                 "minimum_seconds": min(values),
@@ -847,7 +927,65 @@ def command_scaling(args: argparse.Namespace) -> int:
     return 0
 
 
+def percent_difference_rows_for_plot(runs: Sequence[Run]) -> List[Dict[str, Any]]:
+    if len(runs) != 2:
+        raise AnalysisError("percent-difference plot requires exactly two input runs")
+    rows = compare_rows(runs[0], runs[1], allow_missing=False)
+    for row in rows:
+        if row.get("bytes_per_rank_A") != row.get("bytes_per_rank_B"):
+            raise AnalysisError(
+                "percent-difference plot requires matching bytes per rank for each halo size"
+            )
+    return rows
+
+
+def default_plot_title(kind: str, runs: Sequence[Run]) -> str:
+    if kind == "percent-difference":
+        headline = "gHALO Observed Percent Difference"
+    elif len(runs) > 1:
+        headline = f"gHALO {display_backend(runs[0].backend)} Repeatability"
+    else:
+        headline = f"gHALO {display_backend(runs[0].backend)}"
+    system = display_system(runs[0].system)
+    nodes = runs[0].nodes
+    ranks = runs[0].ranks
+    details = []
+    if system:
+        details.append(system)
+    if nodes is not None:
+        details.append(plural(nodes, "Node"))
+    if ranks is not None:
+        rank_kind = "GPU Rank" if runs[0].memory_location == "device" else "Rank"
+        details.append(plural(ranks, rank_kind))
+    return headline if not details else f"{headline}\n{', '.join(details)}"
+
+
+def set_halo_ticks(ax: Any, runs: Sequence[Run]) -> None:
+    halos = sorted({result.halo_words for run in runs for result in run.results})
+    if halos:
+        ax.set_xticks(halos)
+        ax.set_xticklabels([str(halo) for halo in halos])
+
+
+def draw_percent_difference_plot(ax: Any, rows: Sequence[Dict[str, Any]]) -> None:
+    x = [row["halo_words"] for row in rows]
+    y = [row["observed_percent_difference"] for row in rows]
+    ax.plot(x, y, marker="o", label="Observed percent difference")
+    ax.axhline(0.0, color="0.35", linewidth=1.0, linestyle="--")
+    ax.set_xlabel("Halo Length (elements)")
+    ax.set_ylabel("Observed Percent Difference")
+
+
 def command_plot(args: argparse.Namespace) -> int:
+    runs = load_runs(args.inputs)
+    overrides = label_overrides(args, len(runs))
+    labels = run_labels(runs, overrides)
+    percent_difference_rows = (
+        percent_difference_rows_for_plot(runs)
+        if args.kind == "percent-difference"
+        else None
+    )
+
     try:
         import matplotlib
 
@@ -858,20 +996,20 @@ def command_plot(args: argparse.Namespace) -> int:
             "plot output requires matplotlib; install matplotlib or use summarize/compare/aggregate/scaling formats"
         )
 
-    runs = load_runs(args.inputs)
     fig, ax = plt.subplots()
     if args.kind in ("latency", "effective-rate"):
-        for run in runs:
+        for run, label in zip(runs, labels):
             ordered = sorted(run.results, key=lambda item: item.halo_words)
             x = [result.halo_words for result in ordered]
             if args.kind == "latency":
                 y = [result.max_average_seconds * 1.0e6 for result in ordered]
-                ax.set_ylabel("max average time (microseconds)")
+                ax.set_ylabel("Maximum Average Exchange Time (µs)")
             else:
                 y = [effective_gib_per_second(result) for result in ordered]
                 ax.set_ylabel("per-rank effective transferred-byte rate (GiB/s)")
-            ax.plot(x, y, marker="o", label=run.label)
-        ax.set_xlabel("halo length N")
+            ax.plot(x, y, marker="o", label=label)
+        ax.set_xlabel("Halo Length (elements)")
+        set_halo_ticks(ax, runs)
     elif args.kind == "scaling":
         baseline = choose_baseline(args, runs)
         rows = scaling_rows(runs, baseline)
@@ -882,6 +1020,9 @@ def command_plot(args: argparse.Namespace) -> int:
             ax.plot(x, y, marker="o", label=f"N={halo}")
         ax.set_xlabel("nodes or ranks")
         ax.set_ylabel("max average time (microseconds)")
+    elif args.kind == "percent-difference":
+        draw_percent_difference_plot(ax, percent_difference_rows or [])
+        set_halo_ticks(ax, runs)
     elif args.kind == "phase":
         run = runs[0]
         phase_results = [result for result in run.results if result.phase_timing]
@@ -898,10 +1039,11 @@ def command_plot(args: argparse.Namespace) -> int:
     else:
         raise AnalysisError(f"unsupported plot kind {args.kind}")
 
-    apply_axis_scale(ax, "x", args.xscale)
+    xscale = "linear" if args.kind == "phase" and args.xscale == "log2" else args.xscale
+    apply_axis_scale(ax, "x", xscale)
     apply_axis_scale(ax, "y", args.yscale)
-    if args.title:
-        ax.set_title(args.title)
+    ax.grid(True, which="both", alpha=0.25)
+    ax.set_title(args.title or default_plot_title(args.kind, runs))
     ax.legend()
     fig.tight_layout()
     output = args.output or f"{args.kind}.png"
@@ -1017,10 +1159,12 @@ def build_parser() -> argparse.ArgumentParser:
     scaling.set_defaults(func=command_scaling)
 
     plot = subparsers.add_parser("plot", help="create optional matplotlib plots")
-    plot.add_argument("--kind", choices=("latency", "effective-rate", "scaling", "phase"), default="latency")
-    plot.add_argument("--xscale", choices=("linear", "log2", "log10"), default="linear")
+    plot.add_argument("--kind", choices=("latency", "effective-rate", "scaling", "phase", "percent-difference"), default="latency")
+    plot.add_argument("--xscale", choices=("linear", "log2", "log10"), default="log2")
     plot.add_argument("--yscale", choices=("linear", "log10"), default="linear")
     plot.add_argument("--title")
+    plot.add_argument("--label", action="append", default=[])
+    plot.add_argument("--labels")
     plot.add_argument("--output")
     plot.add_argument("--dpi", type=int, default=120)
     plot.add_argument("--baseline", default="smallest-nodes")

@@ -133,6 +133,9 @@ backend, rank count, node count when known, Cartesian dimensions, bytes per
 rank for every halo size, and phase-timing state. Use `--allow-mixed` with
 `--group-by system`, `--group-by backend`, `--group-by nodes`, or
 `--group-by ranks` when unlike runs should be grouped rather than rejected.
+Aggregate output uses readable group labels while retaining complete grouping
+metadata in CSV and JSON columns such as backend, ranks, nodes, Cartesian
+dimensions, phase-timing state, and bytes per rank by halo size.
 
 ## Fixed-Message-Size Scaling
 
@@ -173,6 +176,36 @@ python3 tools/ghalo_analyze.py plot \
   results/frontier/*frontier-64node*
 ```
 
+Repeatability plots can use explicit labels:
+
+```sh
+python3 tools/ghalo_analyze.py plot \
+  --kind latency \
+  --xscale log2 \
+  --labels "Run 1,Run 2" \
+  --output frontier-64node-repeatability.png \
+  RUN_1 RUN_2
+```
+
+Equivalent repeated label options are also accepted:
+
+```sh
+python3 tools/ghalo_analyze.py plot \
+  --kind latency \
+  --label "Run 1" \
+  --label "Run 2" \
+  RUN_1 RUN_2
+```
+
+Observed percent-difference plots compare exactly two compatible runs:
+
+```sh
+python3 tools/ghalo_analyze.py plot \
+  --kind percent-difference \
+  --output frontier-64node-percent-difference.png \
+  RUN_1 RUN_2
+```
+
 Supported plot kinds:
 
 - `latency`: halo length `N` versus maximum average time in microseconds;
@@ -180,12 +213,32 @@ Supported plot kinds:
   rate in GiB/s;
 - `scaling`: nodes or ranks versus time in microseconds, one series per halo
   size;
-- `phase`: phase timing values for one selected run.
+- `phase`: phase timing values for one selected run;
+- `percent-difference`: observed
+  `100 * (time_B - time_A) / time_A` versus halo length for two compatible
+  runs, with a zero reference line.
 
-Supported scales are `linear`, `log2`, and `log10` where applicable. Plots use
-markers at measured halo sizes and do not smooth or interpolate data. This is
-intentional: non-monotonic behavior can indicate real topology, routing,
-synchronization, or congestion effects and should remain visible.
+Latency plots default to a log2 halo-length axis, measured halo sizes as tick
+labels, markers at every measured point, and a light grid. Supported scales are
+`linear`, `log2`, and `log10` where applicable. Plots do not smooth or
+interpolate data. This is intentional: non-monotonic behavior can indicate real
+topology, routing, synchronization, or congestion effects and should remain
+visible.
+
+Automatic legend labels use active-system metadata, node count, and rank count
+instead of timestamp-heavy directory names. For example, Borg runs remain
+labeled as Borg even when they use Frontier build artifacts through the build
+alias mechanism. Full source paths and timestamps remain available in result
+directories and analysis provenance.
+
+When `--title` is not supplied, plots derive a concise title from backend,
+active system, node count, and rank count. A repeated Frontier MPI-HIP run may
+therefore produce a title such as:
+
+```text
+gHALO MPI-HIP Repeatability
+Frontier, 64 Nodes, 512 GPU Ranks
+```
 
 If `matplotlib` is unavailable, the plot command fails clearly and the textual,
 CSV, JSON, and Markdown commands continue to work.

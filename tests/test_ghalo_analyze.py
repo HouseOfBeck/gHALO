@@ -21,6 +21,42 @@ import ghalo_analyze as analyze  # noqa: E402
 DATA = ROOT / "tests" / "data" / "analysis"
 
 
+class FakeAxis:
+    def __init__(self) -> None:
+        self.xscale = None
+        self.yscale = None
+        self.plots = []
+        self.hlines = []
+        self.xlabel = ""
+        self.ylabel = ""
+        self.xticks = []
+        self.xticklabels = []
+
+    def set_xscale(self, *args, **kwargs):
+        self.xscale = (args, kwargs)
+
+    def set_yscale(self, *args, **kwargs):
+        self.yscale = (args, kwargs)
+
+    def plot(self, *args, **kwargs):
+        self.plots.append((args, kwargs))
+
+    def axhline(self, *args, **kwargs):
+        self.hlines.append((args, kwargs))
+
+    def set_xlabel(self, label):
+        self.xlabel = label
+
+    def set_ylabel(self, label):
+        self.ylabel = label
+
+    def set_xticks(self, ticks):
+        self.xticks = ticks
+
+    def set_xticklabels(self, labels):
+        self.xticklabels = labels
+
+
 class GhaloAnalyzeTests(unittest.TestCase):
     def test_json_parsing_and_metadata(self) -> None:
         run = analyze.load_run(str(DATA / "cpu_mpi_run"))
@@ -101,6 +137,20 @@ class GhaloAnalyzeTests(unittest.TestCase):
         self.assertIn("MPIHIPBackend", groups)
         self.assertIn("MPIBackend", groups)
 
+    def test_readable_aggregate_group_labels(self) -> None:
+        rows = analyze.aggregate_rows(
+            [
+                analyze.load_run(str(DATA / "repeat_a")),
+                analyze.load_run(str(DATA / "repeat_b")),
+            ],
+            allow_mixed=False,
+            group_by=[],
+        )
+        self.assertEqual(rows[0]["group"], "Frontier | 1 node | 8 GPU ranks | repeat")
+        self.assertNotIn("((", rows[0]["group"])
+        self.assertEqual(rows[0]["group_backend"], "MPIHIPBackend")
+        self.assertIn("N=2:48B/rank", rows[0]["group_bytes_per_rank_by_halo"])
+
     def test_scaling_baseline_logic(self) -> None:
         runs = [
             analyze.load_run(str(DATA / "cpu_mpi_run")),
@@ -135,6 +185,62 @@ class GhaloAnalyzeTests(unittest.TestCase):
         self.assertIn("phase_phase_sum_seconds", rows[0])
         labeled = analyze.summary_rows(run, label_override="explicit")
         self.assertEqual(labeled[0]["label"], "explicit")
+
+    def test_concise_labels_and_borg_active_system(self) -> None:
+        frontier = analyze.load_run(str(DATA / "repeat_a"))
+        borg = analyze.load_run(str(DATA / "mpi_hip_run"))
+        self.assertEqual(frontier.label, "Frontier | 1 node | 8 GPU ranks | repeat")
+        self.assertEqual(borg.label, "Borg | 1 node | 8 GPU ranks")
+        labels = analyze.run_labels([frontier, borg], ["Run 1", "Run 2"])
+        self.assertEqual(labels, ["Run 1", "Run 2"])
+
+    def test_log2_x_axis_selection_and_halo_ticks(self) -> None:
+        axis = FakeAxis()
+        run = analyze.load_run(str(DATA / "cpu_mpi_run"))
+        analyze.apply_axis_scale(axis, "x", "log2")
+        analyze.set_halo_ticks(axis, [run])
+        self.assertEqual(axis.xscale, (("log",), {"base": 2}))
+        self.assertEqual(axis.xticks, [2, 4])
+        self.assertEqual(axis.xticklabels, ["2", "4"])
+        args = analyze.build_parser().parse_args(
+            ["plot", "--kind", "latency", str(DATA / "cpu_mpi_run")]
+        )
+        self.assertEqual(args.xscale, "log2")
+
+    def test_default_plot_title_uses_metadata(self) -> None:
+        title = analyze.default_plot_title(
+            "latency",
+            [
+                analyze.load_run(str(DATA / "mpi_hip_run")),
+                analyze.load_run(str(DATA / "mpi_hip_run")),
+            ],
+        )
+        self.assertIn("gHALO MPI-HIP Repeatability", title)
+        self.assertIn("Borg", title)
+        self.assertIn("1 Node", title)
+        self.assertIn("8 GPU Ranks", title)
+
+    def test_percent_difference_plot_rows_and_zero_reference(self) -> None:
+        runs = [
+            analyze.load_run(str(DATA / "repeat_a")),
+            analyze.load_run(str(DATA / "repeat_b")),
+        ]
+        rows = analyze.percent_difference_rows_for_plot(runs)
+        self.assertAlmostEqual(rows[0]["observed_percent_difference"], 10.0)
+
+        axis = FakeAxis()
+        analyze.draw_percent_difference_plot(axis, rows)
+        self.assertEqual(axis.plots[0][0][0], [2, 4])
+        self.assertAlmostEqual(axis.plots[0][0][1][0], 10.0)
+        self.assertEqual(axis.hlines[0][0][0], 0.0)
+        self.assertEqual(axis.ylabel, "Observed Percent Difference")
+
+    def test_percent_difference_requires_exactly_two_inputs(self) -> None:
+        run = analyze.load_run(str(DATA / "repeat_a"))
+        with self.assertRaisesRegex(analyze.AnalysisError, "exactly two"):
+            analyze.percent_difference_rows_for_plot([run])
+        with self.assertRaisesRegex(analyze.AnalysisError, "exactly two"):
+            analyze.percent_difference_rows_for_plot([run, run, run])
 
     def test_malformed_and_incomplete_input_errors(self) -> None:
         with self.assertRaises(analyze.AnalysisError):
