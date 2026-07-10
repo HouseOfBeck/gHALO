@@ -146,6 +146,14 @@ On Frontier, GPU-aware MPI runs require:
 export MPICH_GPU_SUPPORT_ENABLED=1
 ```
 
+For repeatable HPC builds and result capture across systems, use the portable
+workflow documented in [Build and Run Workflow](docs/BUILD_AND_RUN.md):
+
+```sh
+GHALO_SYSTEM_NAME=frontier scripts/build.sh --backend mpi
+GHALO_SYSTEM_NAME=frontier scripts/run.sh --backend mpi --nodes 1 --ranks 4
+```
+
 ## Development Philosophy
 
 gHALO values:
@@ -166,6 +174,7 @@ gHALO values:
 - [HALO Analysis](docs/HALO_ANALYSIS.md)
 - [Roadmap](docs/ROADMAP.md)
 - [Development Guide](docs/DEVELOPMENT.md)
+- [Build and Run Workflow](docs/BUILD_AND_RUN.md)
 - [Versioning](docs/VERSIONING.md)
 - [Historical Context](docs/HISTORY.md)
 - [Version 0 Design](docs/VERSION_0_DESIGN.md)

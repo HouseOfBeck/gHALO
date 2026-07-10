@@ -39,6 +39,9 @@ The exact compiler wrappers, module names, and scheduler commands are expected
 to vary by cluster and should be documented under `scripts/` or `examples/` as
 the project matures.
 
+For repeatable system-specific builds and result capture, see
+[Build and Run Workflow](BUILD_AND_RUN.md).
+
 ## Frontier Version 0 Build
 
 For Frontier, use the OLCF programming environment and CMake with the Cray C++
