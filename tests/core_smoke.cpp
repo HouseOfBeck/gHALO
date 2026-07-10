@@ -4,12 +4,15 @@
 #include "ghalo/output.hpp"
 
 #include <cassert>
+#include <chrono>
 #include <cstddef>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <sstream>
 #include <string>
 #include <stdexcept>
+#include <system_error>
 
 namespace {
 
@@ -97,7 +100,43 @@ void test_self_copy_topologies() {
   }
 }
 
-std::string read_file(const std::string& path) {
+class ScopedTempDirectory {
+public:
+  ScopedTempDirectory() {
+    const auto parent = std::filesystem::temp_directory_path();
+    std::filesystem::create_directories(parent);
+    const auto stamp = std::chrono::steady_clock::now()
+                           .time_since_epoch()
+                           .count();
+    for (int attempt = 0; attempt != 100; ++attempt) {
+      const auto candidate =
+          parent / ("ghalo_core_smoke_" +
+                    std::to_string(stamp + static_cast<long long>(attempt)));
+      if (std::filesystem::create_directory(candidate)) {
+        path_ = candidate;
+        return;
+      }
+    }
+    throw std::runtime_error("failed to create unique core smoke temp directory");
+  }
+
+  ~ScopedTempDirectory() {
+    std::error_code error;
+    std::filesystem::remove_all(path_, error);
+  }
+
+  ScopedTempDirectory(const ScopedTempDirectory&) = delete;
+  ScopedTempDirectory& operator=(const ScopedTempDirectory&) = delete;
+
+  std::filesystem::path file(const std::string& name) const {
+    return path_ / name;
+  }
+
+private:
+  std::filesystem::path path_;
+};
+
+std::string read_file(const std::filesystem::path& path) {
   std::ifstream input(path);
   assert(input);
   return {std::istreambuf_iterator<char>(input),
@@ -167,18 +206,19 @@ void test_cli_phase_timing_parse() {
 
 void test_output_without_phase_timing_is_unchanged() {
   const std::vector<ghalo::BenchmarkResult> results{sample_result()};
+  ScopedTempDirectory temp;
 
   std::ostringstream console;
   ghalo::write_console(console, results);
   assert(console.str().find("phase timing") == std::string::npos);
 
-  const std::string csv_path = "/private/tmp/ghalo_core_smoke_no_phase.csv";
-  ghalo::write_csv(csv_path, results);
+  const auto csv_path = temp.file("ghalo_core_smoke_no_phase.csv");
+  ghalo::write_csv(csv_path.string(), results);
   const std::string csv = read_file(csv_path);
   assert(csv.find("phase_input_device_copy_seconds") == std::string::npos);
 
-  const std::string json_path = "/private/tmp/ghalo_core_smoke_no_phase.json";
-  ghalo::write_json(json_path, results);
+  const auto json_path = temp.file("ghalo_core_smoke_no_phase.json");
+  ghalo::write_json(json_path.string(), results);
   const std::string json = read_file(json_path);
   assert(json.find("\"phase_timing\"") == std::string::npos);
 }
@@ -203,20 +243,21 @@ void test_output_with_phase_timing() {
       "maximum local average across ranks";
 
   const std::vector<ghalo::BenchmarkResult> results{result};
+  ScopedTempDirectory temp;
 
   std::ostringstream console;
   ghalo::write_console(console, results);
   assert(console.str().find("MPI-HIP phase timing") != std::string::npos);
   assert(console.str().find("unattributed_us") != std::string::npos);
 
-  const std::string csv_path = "/private/tmp/ghalo_core_smoke_phase.csv";
-  ghalo::write_csv(csv_path, results);
+  const auto csv_path = temp.file("ghalo_core_smoke_phase.csv");
+  ghalo::write_csv(csv_path.string(), results);
   const std::string csv = read_file(csv_path);
   assert(csv.find("phase_input_device_copy_seconds") != std::string::npos);
   assert(csv.find("phase_unattributed_seconds") != std::string::npos);
 
-  const std::string json_path = "/private/tmp/ghalo_core_smoke_phase.json";
-  ghalo::write_json(json_path, results);
+  const auto json_path = temp.file("ghalo_core_smoke_phase.json");
+  ghalo::write_json(json_path.string(), results);
   const std::string json = read_file(json_path);
   assert(json.find("\"phase_timing\"") != std::string::npos);
   assert(json.find("\"phase_timing_metadata\"") != std::string::npos);
