@@ -141,13 +141,27 @@ buffer and before GPU work consumes an MPI receive buffer. Synchronization
 policy must be explicit and documented because it affects the measured
 application-visible communication cost.
 
-The initial implementation uses blocking device-to-device `hipMemcpy` calls for
-the simulated HALO copy steps and blocking `MPI_Sendrecv` calls for
-communication. It synchronizes explicitly after setup, validation
-initialization, and the GPU-aware MPI probe. It does not add an unconditional
-`hipDeviceSynchronize` to every timed exchange iteration, because the blocking
-copy and MPI calls already provide the ordering needed by the implemented
-steady-state path.
+The initial correctness implementation uses blocking device-to-device
+`hipMemcpy` calls for the simulated HALO copy steps and blocking `MPI_Sendrecv`
+calls for communication. It synchronizes explicitly after setup, validation
+initialization, and the GPU-aware MPI probe.
+
+Frontier validation showed that MPI call completion alone is not always enough
+to establish the device-memory visibility relationship needed when HIP consumes
+a buffer written by GPU-aware MPI, or when MPI consumes a buffer just written by
+HIP. Therefore the initial implementation also uses `hipDeviceSynchronize` at
+the GPU-aware MPI/HIP handoff points in the exchange:
+
+- before HIP copies `hoew` to `hins`, because `hoew` may have been written by
+  the previous east-west MPI receive;
+- after north-south MPI receives into `hons`, before HIP copies `hons` to
+  `hiew`;
+- after HIP copies `hons` to `hiew`, before east-west MPI sends from `hiew`.
+
+These synchronizations are part of the measured exchange because they are
+required for the correctness of the initial GPU-aware MPI path. A later
+stream-aware implementation may replace them with lower-overhead ordering, but
+it must preserve the same HALO semantics and validation behavior.
 
 ## HIP Responsibilities
 

@@ -317,20 +317,31 @@ void MPIHIPBackend::exchange() {
 }
 
 void MPIHIPBackend::perform_exchange(bool copy_hoew_to_hins) {
-  const int n = static_cast<int>(halo_words_);
-  const int two_n = 2 * n;
-  const std::size_t bytes = 3 * halo_words_ * sizeof(float);
-
   if (copy_hoew_to_hins) {
-    hip_check(hipMemcpy(hins_.data(), hoew_.data(), bytes,
-                        hipMemcpyDeviceToDevice),
-              "hipMemcpy hoew -> hins");
+    copy_hoew_to_hins();
   }
 
+  exchange_north_south();
+  copy_hons_to_hiew();
+  exchange_east_west();
+}
+
+void MPIHIPBackend::copy_hoew_to_hins() {
+  const std::size_t bytes = 3 * halo_words_ * sizeof(float);
+
+  // On later timed iterations, hoew_ may contain data written by the previous
+  // east/west GPU-aware MPI receive. Make that data visible before HIP reads it.
+  hip_check(hipDeviceSynchronize(), "hipDeviceSynchronize before hoew -> hins");
+  hip_check(hipMemcpy(hins_.data(), hoew_.data(), bytes,
+                      hipMemcpyDeviceToDevice),
+            "hipMemcpy hoew -> hins");
+}
+
+void MPIHIPBackend::exchange_north_south() {
+  const int n = static_cast<int>(halo_words_);
+  const int two_n = 2 * n;
   auto* hins = static_cast<float*>(hins_.data());
   auto* hons = static_cast<float*>(hons_.data());
-  auto* hiew = static_cast<float*>(hiew_.data());
-  auto* hoew = static_cast<float*>(hoew_.data());
 
   exchange_segment(cart_comm_, rank(), hins, n, topology_.south, 9901, hons,
                    topology_.north, 9901, "exchange north/south N");
@@ -338,10 +349,30 @@ void MPIHIPBackend::perform_exchange(bool copy_hoew_to_hins) {
   exchange_segment(cart_comm_, rank(), hins + n, two_n, topology_.north, 9902,
                    hons + n, topology_.south, 9902,
                    "exchange north/south 2N");
+}
 
+void MPIHIPBackend::copy_hons_to_hiew() {
+  const std::size_t bytes = 3 * halo_words_ * sizeof(float);
+
+  // MPI completion alone may not establish the synchronization relationship
+  // HIP needs before reading a GPU buffer written by GPU-aware MPI.
+  hip_check(hipDeviceSynchronize(),
+            "hipDeviceSynchronize after north/south MPI");
   hip_check(hipMemcpy(hiew_.data(), hons_.data(), bytes,
                       hipMemcpyDeviceToDevice),
             "hipMemcpy hons -> hiew");
+  // Correctness-first synchronization for the initial GPU-aware MPI path. A
+  // future stream-aware implementation may replace this with lower-overhead
+  // ordering, but the visibility cost is part of the exchange until then.
+  hip_check(hipDeviceSynchronize(),
+            "hipDeviceSynchronize after hons -> hiew");
+}
+
+void MPIHIPBackend::exchange_east_west() {
+  const int n = static_cast<int>(halo_words_);
+  const int two_n = 2 * n;
+  auto* hiew = static_cast<float*>(hiew_.data());
+  auto* hoew = static_cast<float*>(hoew_.data());
 
   exchange_segment(cart_comm_, rank(), hiew, n, topology_.west, 9903, hoew,
                    topology_.east, 9903, "exchange east/west N");
@@ -575,6 +606,8 @@ void MPIHIPBackend::validate_exchange() {
   std::vector<float> local_hoew_prefix;
   std::vector<float> local_hins_prefix;
   std::vector<float> received_hons_prefix;
+  std::vector<float> copied_hiew_prefix;
+  std::vector<float> final_hoew_prefix;
 
   auto diagnostic_message = [&](const std::string& reason) {
     std::ostringstream message;
@@ -591,6 +624,8 @@ void MPIHIPBackend::validate_exchange() {
             << " local_hoew_prefix=" << values_string(local_hoew_prefix)
             << " local_hins_prefix=" << values_string(local_hins_prefix)
             << " received_hons_prefix=" << values_string(received_hons_prefix)
+            << " copied_hiew_prefix=" << values_string(copied_hiew_prefix)
+            << " final_hoew_prefix=" << values_string(final_hoew_prefix)
             << " MPICH_GPU_SUPPORT_ENABLED="
             << getenv_string("MPICH_GPU_SUPPORT_ENABLED")
             << " ROCR_VISIBLE_DEVICES=" << rocr_visible_devices_;
@@ -601,9 +636,7 @@ void MPIHIPBackend::validate_exchange() {
     local_hoew_prefix = copy_prefix_to_host(hoew_, count);
     verify_pattern_prefix(local_hoew_prefix, rank(), halo_words_, "hoew");
 
-    hip_check(hipMemcpy(hins_.data(), hoew_.data(), count * sizeof(float),
-                        hipMemcpyDeviceToDevice),
-              "hipMemcpy validation hoew -> hins");
+    copy_hoew_to_hins();
 
     local_hins_prefix = copy_prefix_to_host(hins_, count);
     verify_pattern_prefix(local_hins_prefix, rank(), halo_words_, "hins");
@@ -612,7 +645,16 @@ void MPIHIPBackend::validate_exchange() {
   }
 
   try {
-    perform_exchange(false);
+    exchange_north_south();
+    hip_check(hipDeviceSynchronize(),
+              "hipDeviceSynchronize before validation hons sample");
+    received_hons_prefix = copy_prefix_to_host(hons_, count);
+    copy_hons_to_hiew();
+    copied_hiew_prefix = copy_prefix_to_host(hiew_, count);
+    exchange_east_west();
+    hip_check(hipDeviceSynchronize(),
+              "hipDeviceSynchronize after validation east/west MPI");
+    final_hoew_prefix = copy_prefix_to_host(hoew_, count);
   } catch (const std::exception& error) {
     throw std::runtime_error(diagnostic_message(error.what()));
   }
@@ -625,10 +667,6 @@ void MPIHIPBackend::validate_exchange() {
   hip_check(hipMemcpy(hoew.data(), hoew_.data(), count * sizeof(float),
                       hipMemcpyDeviceToHost),
             "hipMemcpy validation hoew");
-  const auto hons_sample_count = std::min<std::size_t>(8, hons.size());
-  received_hons_prefix.assign(hons.begin(),
-                              hons.begin() +
-                                  static_cast<std::ptrdiff_t>(hons_sample_count));
 
   const int north_east =
       cart_rank(cart_comm_, (topology_.row + 1) % topology_.rows,
@@ -654,6 +692,8 @@ void MPIHIPBackend::validate_exchange() {
               << " local_hoew_prefix=" << values_string(local_hoew_prefix)
               << " local_hins_prefix=" << values_string(local_hins_prefix)
               << " received_hons_prefix=" << values_string(received_hons_prefix)
+              << " copied_hiew_prefix=" << values_string(copied_hiew_prefix)
+              << " final_hoew_prefix=" << values_string(final_hoew_prefix)
               << " MPICH_GPU_SUPPORT_ENABLED="
               << getenv_string("MPICH_GPU_SUPPORT_ENABLED")
               << " ROCR_VISIBLE_DEVICES=" << rocr_visible_devices_;

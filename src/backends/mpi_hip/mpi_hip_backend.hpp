@@ -61,6 +61,10 @@ private:
   void probe_device_mpi();
   void validate_exchange();
   void perform_exchange(bool copy_hoew_to_hins);
+  void copy_hoew_to_hins();
+  void exchange_north_south();
+  void copy_hons_to_hiew();
+  void exchange_east_west();
 
   MPI_Comm cart_comm_ = MPI_COMM_NULL;
   MPI_Comm local_comm_ = MPI_COMM_NULL;
