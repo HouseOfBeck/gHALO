@@ -60,7 +60,7 @@ This job checks shell syntax and runs ShellCheck:
 
 ```sh
 bash -n scripts/*.sh scripts/systems/*.sh tests/*.sh
-shellcheck scripts/*.sh scripts/systems/*.sh tests/*.sh
+shellcheck -x scripts/*.sh scripts/systems/*.sh tests/*.sh
 ```
 
 The shell smoke test is also part of CTest and can be run directly:

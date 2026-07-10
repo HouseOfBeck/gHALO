@@ -100,12 +100,15 @@ test_system_resolution_metadata() (
 
 test_borg_environment_setup() (
   local bin_dir="${GHALO_TEST_TMPDIR}/ghalo-borg-workflow-bin"
+  local rocm_marker="${GHALO_TEST_TMPDIR}/ghalo-borg-rocm-loaded.txt"
   mkdir -p "${bin_dir}"
   printf '#!/usr/bin/env bash\nexit 0\n' >"${bin_dir}/CC"
   printf '#!/usr/bin/env bash\nexit 0\n' >"${bin_dir}/srun"
   chmod +x "${bin_dir}/CC" "${bin_dir}/srun"
   export PATH="${bin_dir}:${PATH}"
 
+  # The mock is called indirectly by scripts/systems/borg.sh.
+  # shellcheck disable=SC2317
   module() {
     if [[ "$1" != "load" ]]; then
       return 1
@@ -115,7 +118,7 @@ test_borg_environment_setup() (
         return 0
         ;;
       rocm/6.2.4)
-        export GHALO_TEST_ROCM_624_LOADED=1
+        printf 'loaded\n' >"${rocm_marker}"
         return 0
         ;;
       *)
@@ -134,10 +137,10 @@ test_borg_environment_setup() (
     exit 1
   fi
 
-  unset GHALO_TEST_ROCM_624_LOADED
+  rm -f "${rocm_marker}"
   ghalo_system_setup_run mpi-hip
   assert_eq 1 "${MPICH_GPU_SUPPORT_ENABLED}" "Borg mpi-hip GPU support"
-  assert_eq 1 "${GHALO_TEST_ROCM_624_LOADED}" "Borg ROCm 6.2.4 load"
+  assert_contains 'loaded' "${rocm_marker}" "Borg ROCm 6.2.4 load"
 )
 
 test_submit_dry_run() (

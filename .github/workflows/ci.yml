@@ -140,4 +140,4 @@ jobs:
         run: bash -n scripts/*.sh scripts/systems/*.sh tests/*.sh
 
       - name: Run ShellCheck
-        run: shellcheck scripts/*.sh scripts/systems/*.sh tests/*.sh
+        run: shellcheck -x scripts/*.sh scripts/systems/*.sh tests/*.sh
