@@ -1,0 +1,3 @@
+active_system=frontier
+build_system=frontier
+backend=mpi

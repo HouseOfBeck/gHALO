@@ -1,0 +1,4 @@
+active_system=frontier
+build_system=frontier
+backend=mpi
+binary=/repo/builds/frontier/mpi/ghalo

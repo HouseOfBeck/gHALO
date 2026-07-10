@@ -180,6 +180,25 @@ ghalo --backend mpi-hip --phase-timing
 
 See [Phase Timing](docs/PHASE_TIMING.md).
 
+## Result Analysis
+
+Portable result analysis is available through `tools/ghalo_analyze.py` and the
+small `scripts/analyze.sh` wrapper. Core analysis uses only the Python 3
+standard library; plots are optional and require `matplotlib`.
+
+Examples:
+
+```sh
+python3 tools/ghalo_analyze.py summarize results/frontier/<run-directory>
+python3 tools/ghalo_analyze.py compare RUN_A RUN_B
+python3 tools/ghalo_analyze.py aggregate results/frontier/*frontier-64node*
+python3 tools/ghalo_analyze.py scaling results/borg/*mpi-hip* results/frontier/*mpi-hip*
+```
+
+The analyzer reports measured timing fields separately from derived metrics
+such as the per-rank effective transferred-byte rate. See
+[Result Analysis](docs/ANALYSIS.md).
+
 ## Development Philosophy
 
 gHALO values:
@@ -203,6 +222,7 @@ gHALO values:
 - [Build and Run Workflow](docs/BUILD_AND_RUN.md)
 - [Continuous Integration](docs/CI.md)
 - [Phase Timing](docs/PHASE_TIMING.md)
+- [Result Analysis](docs/ANALYSIS.md)
 - [Versioning](docs/VERSIONING.md)
 - [Historical Context](docs/HISTORY.md)
 - [Version 0 Design](docs/VERSION_0_DESIGN.md)

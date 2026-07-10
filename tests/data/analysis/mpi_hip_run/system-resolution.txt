@@ -1,0 +1,4 @@
+active_system=borg
+build_system=frontier
+backend=mpi-hip
+binary=/repo/builds/frontier/mpi-hip/ghalo
