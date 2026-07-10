@@ -48,10 +48,16 @@ See [Historical Context](docs/HISTORY.md) and
 
 ## Current Status
 
-gHALO is in early `0.1.x` development. The repository contains the project
-infrastructure, documentation, CMake feature gates, and an MPI-oriented version
-0 path. HIP, RCCL, UCX, and GPU-aware MPI are planned but are not required for
-the current CPU/MPI development workflow.
+gHALO v0.3.0 is an early research release with two implemented benchmark
+backends:
+
+- `mpi`: CPU/host-memory MPI reference backend.
+- `mpi-hip`: AMD HIP device-memory backend using GPU-aware MPI.
+
+The `mpi-hip` backend has been validated on Frontier with Cray MPICH, AMD GPUs,
+correctness validation, JSON/CSV output, metadata capture, phase timing, and
+post-run analysis tooling. RCCL, UCX, heat maps, and automated cluster-health
+diagnostics remain planned work.
 
 The development model assumes:
 
@@ -66,8 +72,9 @@ The development model assumes:
 ## Roadmap Summary
 
 - `0.1.x`: CPU reference implementation and MPI baseline.
-- `0.2.x`: GPU-aware MPI and device-resident exchange paths.
-- `0.3.x`: HIP foundations, kernels, and GPU buffer management.
+- `0.2.x`: GPU-aware MPI bring-up and device-resident exchange path.
+- `0.3.x`: release-ready MPI-HIP workflow, phase timing, system scripts, batch
+  submission, and result analysis tools.
 - `0.4.x`: RCCL backend experiments.
 - `0.5.x`: UCX backend experiments and transport diagnostics.
 - `0.6.x`: diagnostic reporting, heat maps, and topology health analysis.
@@ -93,12 +100,12 @@ See [Roadmap](docs/ROADMAP.md) and [Versioning](docs/VERSIONING.md).
 └── tests/                tests and test CMake configuration
 ```
 
-## Build System
+## Build And Run
 
 gHALO uses CMake and C++20. Optional dependencies are disabled by default so the
 project remains usable from development workstations without GPU tooling.
 
-Portable configuration:
+### CPU-Only Configuration
 
 ```sh
 cmake -S . -B build
@@ -106,7 +113,7 @@ cmake --build build
 ctest --test-dir build
 ```
 
-MPI build:
+### CPU MPI Backend
 
 ```sh
 cmake -S . -B build-mpi -DGHALO_ENABLE_MPI=ON
@@ -120,7 +127,7 @@ Example MPI run:
 srun -n 16 ./build-mpi/ghalo --csv ghalo.csv --json ghalo.json
 ```
 
-Version 0 smoke test:
+Short MPI smoke test:
 
 ```sh
 cmake -S . -B build -DGHALO_ENABLE_MPI=ON
@@ -128,23 +135,34 @@ cmake --build build
 mpirun -np 4 ./build/ghalo --target-seconds 0.1
 ```
 
-Future feature gates:
+### AMD HIP GPU-Aware MPI Backend
+
+The `mpi-hip` backend requires MPI, HIP, and GPU-aware MPI support on the
+remote Linux HPC system:
 
 ```sh
-cmake -S . -B build -DGHALO_ENABLE_HIP=ON
-cmake -S . -B build -DGHALO_ENABLE_MPI=ON -DGHALO_ENABLE_HIP=ON -DGHALO_ENABLE_MPI_HIP=ON
-cmake -S . -B build -DGHALO_ENABLE_RCCL=ON
-cmake -S . -B build -DGHALO_ENABLE_UCX=ON
+cmake -S . -B build-mpi-hip \
+  -DGHALO_ENABLE_MPI=ON \
+  -DGHALO_ENABLE_HIP=ON \
+  -DGHALO_ENABLE_MPI_HIP=ON
+cmake --build build-mpi-hip
 ```
-
-Those options are intended for remote Linux HPC environments where the required
-toolchains and libraries are available.
 
 On Frontier, GPU-aware MPI runs require:
 
 ```sh
 export MPICH_GPU_SUPPORT_ENABLED=1
 ```
+
+Additional future feature gates remain available but are not implemented yet:
+
+```sh
+cmake -S . -B build -DGHALO_ENABLE_RCCL=ON
+cmake -S . -B build -DGHALO_ENABLE_UCX=ON
+```
+
+Those options are intended for remote Linux HPC environments where the required
+toolchains and libraries are available.
 
 For repeatable HPC builds and result capture across systems, use the portable
 workflow documented in [Build and Run Workflow](docs/BUILD_AND_RUN.md):
@@ -154,19 +172,44 @@ GHALO_SYSTEM_NAME=frontier scripts/build.sh --backend mpi
 GHALO_SYSTEM_NAME=frontier scripts/run.sh --backend mpi --nodes 1 --ranks 4
 ```
 
+Interactive Frontier MPI-HIP run:
+
+```sh
+GHALO_SYSTEM_NAME=frontier scripts/build.sh --backend mpi-hip
+GHALO_SYSTEM_NAME=frontier scripts/run.sh \
+  --backend mpi-hip \
+  --nodes 1 \
+  --ranks 8 \
+  --ranks-per-node 8 \
+  --target-seconds 3 \
+  --validate
+```
+
 Borg, Frontier's hot-spare cabinet, is supported as a first-class system
-profile. Borg runs write results under `results/borg/` and reuse compatible
+profile. Borg runs write results under `results/borg/` while reusing compatible
 Frontier build trees by default:
 
 ```sh
-GHALO_SYSTEM_NAME=borg scripts/run.sh --backend mpi-hip --nodes 1 --ranks 4 --validate
+GHALO_SYSTEM_NAME=borg scripts/run.sh \
+  --backend mpi-hip \
+  --nodes 1 \
+  --ranks 8 \
+  --ranks-per-node 8 \
+  --validate
 ```
 
 Batch submission is available through Slurm `sbatch` while preserving the same
 run workflow and result metadata:
 
 ```sh
-GHALO_SYSTEM_NAME=frontier scripts/submit.sh --backend mpi --account <project> --nodes 1 --ranks 4 --ranks-per-node 4 --time 00:10:00
+GHALO_SYSTEM_NAME=frontier scripts/submit.sh \
+  --backend mpi-hip \
+  --account <project> \
+  --nodes 1 \
+  --ranks 8 \
+  --ranks-per-node 8 \
+  --time 00:10:00 \
+  --validate
 ```
 
 GitHub Actions validate portable CPU-only, OpenMPI, and shell workflow paths.
@@ -193,6 +236,7 @@ python3 tools/ghalo_analyze.py summarize results/frontier/<run-directory>
 python3 tools/ghalo_analyze.py compare RUN_A RUN_B
 python3 tools/ghalo_analyze.py aggregate results/frontier/*frontier-64node*
 python3 tools/ghalo_analyze.py scaling results/borg/*mpi-hip* results/frontier/*mpi-hip*
+python3 tools/ghalo_analyze.py plot --kind latency --output latency.png RUN_A RUN_B
 ```
 
 The analyzer reports measured timing fields separately from derived metrics
@@ -223,6 +267,7 @@ gHALO values:
 - [Continuous Integration](docs/CI.md)
 - [Phase Timing](docs/PHASE_TIMING.md)
 - [Result Analysis](docs/ANALYSIS.md)
+- [v0.3.0 Release Notes](docs/RELEASE_NOTES_v0.3.0.md)
 - [Versioning](docs/VERSIONING.md)
 - [Historical Context](docs/HISTORY.md)
 - [Version 0 Design](docs/VERSION_0_DESIGN.md)

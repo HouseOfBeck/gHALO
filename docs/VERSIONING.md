@@ -11,8 +11,10 @@ deliberately and documented in `CHANGELOG.md`.
 ## Proposed Milestones
 
 - `0.1.x`: CPU reference implementation and MPI baseline.
-- `0.2.x`: GPU-aware MPI and device-resident exchange paths.
-- `0.3.x`: HIP foundations, kernels, and GPU buffer management.
+- `0.2.x`: GPU-aware MPI bring-up and device-resident exchange path.
+- `0.3.x`: release-ready MPI-HIP workflow, correctness validation, phase
+  timing, system scripts, batch submission, metadata capture, and result
+  analysis tools.
 - `0.4.x`: RCCL backend experiments.
 - `0.5.x`: UCX backend experiments and lower-level transport diagnostics.
 - `0.6.x`: Diagnostic reporting, heat maps, and topology health analysis.

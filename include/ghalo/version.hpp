@@ -2,6 +2,6 @@
 
 namespace ghalo {
 
-inline constexpr const char* version = "0.1.0";
+inline constexpr const char* version = "0.3.0";
 
 } // namespace ghalo

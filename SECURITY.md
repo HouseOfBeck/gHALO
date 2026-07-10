@@ -10,9 +10,11 @@ generation.
 | Version | Supported |
 | ------- | --------- |
 | `main`  | Yes       |
-| `< 0.1` | No        |
+| `0.3.x` | Yes       |
+| `< 0.3` | No        |
 
-Until the first tagged release, security fixes target `main`.
+Security fixes target `main` and the current supported `0.3.x` release line
+when practical.
 
 ## Reporting a Vulnerability
 

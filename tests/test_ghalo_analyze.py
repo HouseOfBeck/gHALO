@@ -60,7 +60,7 @@ class FakeAxis:
 class GhaloAnalyzeTests(unittest.TestCase):
     def test_json_parsing_and_metadata(self) -> None:
         run = analyze.load_run(str(DATA / "cpu_mpi_run"))
-        self.assertEqual(run.version, "0.1.0")
+        self.assertEqual(run.version, "0.3.0")
         self.assertEqual(run.system, "frontier")
         self.assertEqual(run.build_system, "frontier")
         self.assertEqual(run.git_commit, "abcdef0")

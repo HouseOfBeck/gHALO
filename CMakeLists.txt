@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 
 project(
   gHALO
-  VERSION 0.1.0
+  VERSION 0.3.0
   DESCRIPTION "GPU-native halo exchange benchmark and diagnostic suite"
   HOMEPAGE_URL "https://github.com/gHALO/gHALO"
   LANGUAGES CXX
