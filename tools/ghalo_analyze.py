@@ -11,6 +11,7 @@ import math
 import os
 import platform
 import statistics
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -140,18 +141,59 @@ class Run:
 
     @property
     def nodes(self) -> Optional[int]:
-        value = self.meta_value("nodes")
-        if value is None:
-            value = self.meta_value("NodeCnt", from_file="slurm-job.txt")
-        return parse_int(value)
+        explicit = self.first_result_metadata_int(
+            "nodes",
+            "node_count",
+            "num_nodes",
+            "slurm_job_num_nodes",
+        )
+        if explicit is not None:
+            return explicit
+
+        for filename in ("submission.txt", "slurm-job.txt", "environment.txt"):
+            value = self.meta_value(
+                "nodes",
+                "node_count",
+                "num_nodes",
+                "SLURM_JOB_NUM_NODES",
+                "NodeCnt",
+                "NumNodes",
+                from_file=filename,
+            )
+            parsed = parse_int(value)
+            if parsed is not None:
+                return parsed
+
+        ranks = self.ranks
+        ranks_per_node = self.ranks_per_node
+        if ranks and ranks_per_node and ranks % ranks_per_node == 0:
+            return ranks // ranks_per_node
+        return None
 
     @property
     def ranks_per_node(self) -> Optional[int]:
-        nodes = self.nodes
+        explicit = self.first_result_metadata_int(
+            "ranks_per_node",
+            "tasks_per_node",
+            "gpus_per_node",
+        )
+        if explicit is not None:
+            return explicit
+        value = self.meta_value(
+            "ranks_per_node",
+            "tasks_per_node",
+            "gpus_per_node",
+            "SLURM_NTASKS_PER_NODE",
+        )
+        parsed = parse_first_int(value)
+        if parsed is not None:
+            return parsed
+
+        nodes = self.nodes_without_derivation()
         ranks = self.ranks
         if nodes and ranks and ranks % nodes == 0:
             return ranks // nodes
-        return parse_int(self.meta_value("ranks_per_node"))
+        return None
 
     @property
     def git_commit(self) -> str:
@@ -169,18 +211,55 @@ class Run:
     def phase_timing_enabled(self) -> bool:
         return any(result.phase_timing for result in self.results)
 
-    def meta_value(self, key: str, from_file: Optional[str] = None) -> Optional[str]:
+    def first_result_metadata_int(self, *keys: str) -> Optional[int]:
+        if not self.results:
+            return None
+        metadata = self.results[0].metadata
+        for key in keys:
+            value = metadata.get(key)
+            parsed = parse_int(value)
+            if parsed is not None:
+                return parsed
+        return None
+
+    def nodes_without_derivation(self) -> Optional[int]:
+        explicit = self.first_result_metadata_int(
+            "nodes",
+            "node_count",
+            "num_nodes",
+            "slurm_job_num_nodes",
+        )
+        if explicit is not None:
+            return explicit
+        for filename in ("submission.txt", "slurm-job.txt", "environment.txt"):
+            value = self.meta_value(
+                "nodes",
+                "node_count",
+                "num_nodes",
+                "SLURM_JOB_NUM_NODES",
+                "NodeCnt",
+                "NumNodes",
+                from_file=filename,
+            )
+            parsed = parse_int(value)
+            if parsed is not None:
+                return parsed
+        return None
+
+    def meta_value(self, *keys: str, from_file: Optional[str] = None) -> Optional[str]:
         files = [from_file] if from_file else list(self.metadata_files)
         for filename in files:
             if not filename:
                 continue
             values = parse_metadata_text(self.metadata_files.get(filename, ""))
-            if key in values:
-                return values[key]
+            for key in keys:
+                if key in values:
+                    return values[key]
             if filename == "slurm-job.txt":
                 slurm_values = parse_slurm_text(self.metadata_files.get(filename, ""))
-                if key in slurm_values:
-                    return slurm_values[key]
+                for key in keys:
+                    if key in slurm_values:
+                        return slurm_values[key]
         return None
 
 
@@ -191,6 +270,18 @@ def parse_int(value: Optional[str]) -> Optional[int]:
         return int(str(value))
     except ValueError:
         return None
+
+
+def parse_first_int(value: Optional[str]) -> Optional[int]:
+    if value in (None, ""):
+        return None
+    digits = ""
+    for char in str(value):
+        if char.isdigit():
+            digits += char
+        elif digits:
+            break
+    return int(digits) if digits else None
 
 
 def infer_system_from_path(path: Path) -> str:
@@ -281,6 +372,8 @@ def load_run(path_text: str) -> Run:
     else:
         run = load_csv_run(source, result_path, metadata_files, warnings)
     validate_run(run)
+    if run.nodes is None:
+        run.warnings.append(f"{result_path}: node count is unknown")
     return run
 
 
@@ -402,6 +495,8 @@ def result_from_csv(row: Dict[str, str], source: Path) -> RunResult:
         "hip_runtime_version": unquote_csv_string(row.get("hip_runtime_version", "")),
         "validation_enabled": row.get("validation_enabled", ""),
         "validation_passed": row.get("validation_passed", ""),
+        "nodes": row.get("nodes", ""),
+        "ranks_per_node": row.get("ranks_per_node", ""),
     }
     phase = None
     if any(row.get("phase_" + name) for name in PHASE_FIELDS):
@@ -549,9 +644,22 @@ def write_output(rows_or_payload: Any, fmt: str, output: Optional[str]) -> None:
     else:
         raise AnalysisError(f"unsupported output format {fmt}")
     if output:
-        Path(output).write_text(text, encoding="utf-8")
+        output_path = Path(output)
+        ensure_output_parent(output_path)
+        output_path.write_text(text, encoding="utf-8")
     else:
         sys.stdout.write(text)
+
+
+def ensure_output_parent(path: Path) -> None:
+    parent = path.parent
+    if not parent or str(parent) == ".":
+        return
+    if parent.exists() and not parent.is_dir():
+        raise AnalysisError(f"output parent exists but is not a directory: {parent}")
+    parent.mkdir(parents=True, exist_ok=True)
+    if not os.access(parent, os.W_OK):
+        raise AnalysisError(f"output parent is not writable: {parent}")
 
 
 def ensure_rows(value: Any) -> List[Dict[str, Any]]:
@@ -817,11 +925,25 @@ def aggregate_group_metadata(run: Run, key: Tuple[Any, ...], group_by: Sequence[
         f"N={result.halo_words}:{result.total_exchange_bytes_per_rank}B/rank"
         for result in sorted(run.results, key=lambda item: item.halo_words)
     )
+    label_parts = []
+    if run.system:
+        label_parts.append(display_system(run.system))
+    if run.backend:
+        label_parts.append(display_backend(run.backend))
+    if run.nodes is not None:
+        label_parts.append(plural(run.nodes, "node"))
+    if run.ranks is not None:
+        label_parts.append(plural(run.ranks, "rank"))
+    if run.cartesian:
+        label_parts.append(run.cartesian)
     return {
-        "group": run.label,
+        "group": " | ".join(label_parts) if label_parts else run.label,
         "group_backend": run.backend,
+        "group_active_system": run.system,
+        "group_build_system": run.build_system,
         "group_ranks": run.ranks if run.ranks is not None else "",
         "group_nodes": run.nodes if run.nodes is not None else "",
+        "group_ranks_per_node": run.ranks_per_node if run.ranks_per_node is not None else "",
         "group_cartesian_dimensions": run.cartesian,
         "group_phase_timing_enabled": run.phase_timing_enabled,
         "group_bytes_per_rank_by_halo": bytes_by_halo,
@@ -927,6 +1049,90 @@ def command_scaling(args: argparse.Namespace) -> int:
     return 0
 
 
+def same_scale_configuration(runs: Sequence[Run]) -> bool:
+    if not runs:
+        return False
+    first = (runs[0].nodes, runs[0].ranks, runs[0].ranks_per_node)
+    return all((run.nodes, run.ranks, run.ranks_per_node) == first for run in runs)
+
+
+def constant_ranks_per_node(runs: Sequence[Run]) -> Optional[int]:
+    values = [run.ranks_per_node for run in runs]
+    if not values or any(value is None for value in values):
+        return None
+    first = values[0]
+    return first if all(value == first for value in values) else None
+
+
+def choose_scaling_x_axis(runs: Sequence[Run], requested: str) -> str:
+    if requested not in ("auto", "nodes", "ranks"):
+        raise AnalysisError(f"unsupported scaling x-axis {requested}")
+    all_nodes_known = all(run.nodes is not None for run in runs)
+    if requested == "nodes":
+        if not all_nodes_known:
+            raise AnalysisError("--x-axis nodes requires known node counts for every run")
+        return "nodes"
+    if requested == "ranks":
+        return "ranks"
+    if all_nodes_known:
+        return "nodes"
+    return "ranks"
+
+
+def power_of_two_ticks(values: Sequence[int]) -> List[int]:
+    unique = sorted(set(values))
+    if unique and all(value > 0 and value & (value - 1) == 0 for value in unique):
+        return unique
+    return []
+
+
+def scaling_x_value(run: Run, axis: str) -> int:
+    if axis == "nodes":
+        if run.nodes is None:
+            raise AnalysisError("node count is unknown")
+        return run.nodes
+    if run.ranks is None:
+        raise AnalysisError("rank count is unknown")
+    return run.ranks
+
+
+def scaling_axis_label(runs: Sequence[Run], axis: str) -> str:
+    if axis == "nodes":
+        return "Node Count"
+    return "GPU Rank Count" if any(run.memory_location == "device" for run in runs) else "Rank Count"
+
+
+def scaling_run_label(run: Run, axis: str, include_ranks: bool = True) -> str:
+    if axis == "nodes" and run.nodes is not None:
+        label = plural(run.nodes, "node")
+        if include_ranks and run.ranks is not None:
+            rank_kind = "GPU rank" if run.memory_location == "device" else "rank"
+            label += f" ({plural(run.ranks, rank_kind)})"
+        return label
+    if run.ranks is not None:
+        rank_kind = "GPU rank" if run.memory_location == "device" else "rank"
+        return plural(run.ranks, rank_kind)
+    return run.label
+
+
+def plot_series_labels(
+    kind: str,
+    runs: Sequence[Run],
+    overrides: Sequence[Optional[str]],
+    x_axis: str = "auto",
+) -> List[str]:
+    if any(overrides):
+        return run_labels(runs, overrides)
+    if kind == "scaling":
+        return [f"N={result.halo_words}" for result in []]
+    if kind in ("latency", "effective-rate") and not same_scale_configuration(runs):
+        axis = choose_scaling_x_axis(runs, x_axis)
+        return [scaling_run_label(run, axis) for run in runs]
+    if len(runs) > 1:
+        return [f"Run {index + 1}" for index, _ in enumerate(runs)]
+    return [runs[0].label] if runs else []
+
+
 def percent_difference_rows_for_plot(runs: Sequence[Run]) -> List[Dict[str, Any]]:
     if len(runs) != 2:
         raise AnalysisError("percent-difference plot requires exactly two input runs")
@@ -940,8 +1146,15 @@ def percent_difference_rows_for_plot(runs: Sequence[Run]) -> List[Dict[str, Any]
 
 
 def default_plot_title(kind: str, runs: Sequence[Run]) -> str:
+    scaling = kind in ("scaling", "effective-rate") or (
+        kind == "latency" and len(runs) > 1 and not same_scale_configuration(runs)
+    )
     if kind == "percent-difference":
-        headline = "gHALO Observed Percent Difference"
+        headline = f"gHALO {display_backend(runs[0].backend)} Repeatability Difference"
+    elif kind == "effective-rate":
+        headline = f"gHALO {display_backend(runs[0].backend)} Effective Transferred-Byte Rate"
+    elif scaling:
+        headline = f"gHALO {display_backend(runs[0].backend)} Scaling"
     elif len(runs) > 1:
         headline = f"gHALO {display_backend(runs[0].backend)} Repeatability"
     else:
@@ -949,15 +1162,19 @@ def default_plot_title(kind: str, runs: Sequence[Run]) -> str:
     system = display_system(runs[0].system)
     nodes = runs[0].nodes
     ranks = runs[0].ranks
+    rpn = constant_ranks_per_node(runs)
     details = []
     if system:
         details.append(system)
-    if nodes is not None:
+    if scaling and rpn is not None:
+        rank_kind = "GPU Rank" if runs[0].memory_location == "device" else "Rank"
+        details.append(plural(rpn, rank_kind) + " per Node")
+    elif nodes is not None:
         details.append(plural(nodes, "Node"))
-    if ranks is not None:
+    if not scaling and ranks is not None:
         rank_kind = "GPU Rank" if runs[0].memory_location == "device" else "Rank"
         details.append(plural(ranks, rank_kind))
-    return headline if not details else f"{headline}\n{', '.join(details)}"
+    return headline if not details else f"{headline}\n{' — '.join(details)}"
 
 
 def set_halo_ticks(ax: Any, runs: Sequence[Run]) -> None:
@@ -973,13 +1190,82 @@ def draw_percent_difference_plot(ax: Any, rows: Sequence[Dict[str, Any]]) -> Non
     ax.plot(x, y, marker="o", label="Observed percent difference")
     ax.axhline(0.0, color="0.35", linewidth=1.0, linestyle="--")
     ax.set_xlabel("Halo Length (elements)")
-    ax.set_ylabel("Observed Percent Difference")
+    ax.set_ylabel("Observed Difference (%)")
+
+
+def apply_plot_style(plt: Any, ax: Any, style: str, series_count: int) -> Dict[str, Any]:
+    if style == "default":
+        ax.grid(True, which="both", alpha=0.25)
+        return {"linewidth": 1.5, "markersize": 5}
+    if style != "publication":
+        raise AnalysisError(f"unsupported plot style {style}")
+    plt.rcParams.update(
+        {
+            "font.size": 12,
+            "axes.labelsize": 13,
+            "axes.titlesize": 14,
+            "legend.fontsize": 10,
+            "lines.linewidth": 2.2,
+            "lines.markersize": 7,
+            "figure.figsize": (7.2, 4.8),
+            "axes.prop_cycle": plt.cycler(
+                color=[
+                    "#0072B2",
+                    "#D55E00",
+                    "#009E73",
+                    "#CC79A7",
+                    "#F0E442",
+                    "#56B4E9",
+                    "#E69F00",
+                    "#000000",
+                ]
+            ),
+        }
+    )
+    ax.grid(True, which="major", alpha=0.22, linewidth=0.8)
+    return {"linewidth": 2.2, "markersize": 7}
+
+
+def place_legend(ax: Any, position: str, style: str, series_count: int) -> None:
+    if position == "inside":
+        ax.legend()
+        return
+    if position == "outside" or (position == "auto" and style == "publication" and series_count > 4):
+        ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.0)
+        return
+    if position == "auto":
+        ax.legend()
+        return
+    raise AnalysisError(f"unsupported legend position {position}")
+
+
+def output_format_for(path: str, requested: Optional[str]) -> str:
+    if requested:
+        return requested
+    suffix = Path(path).suffix.lower().lstrip(".")
+    if suffix in ("png", "pdf", "svg"):
+        return suffix
+    return "png"
+
+
+def output_dpi(style: str, output_format: str, dpi: Optional[int]) -> Optional[int]:
+    if output_format in ("pdf", "svg"):
+        return None
+    if dpi is not None:
+        return dpi
+    return 600 if style == "publication" else 120
 
 
 def command_plot(args: argparse.Namespace) -> int:
     runs = load_runs(args.inputs)
     overrides = label_overrides(args, len(runs))
-    labels = run_labels(runs, overrides)
+    x_axis_request = getattr(args, "x_axis", "auto")
+    style = getattr(args, "style", "default")
+    legend_position = getattr(args, "legend_position", "auto")
+    output_format = getattr(args, "format", None)
+    requested_dpi = getattr(args, "dpi", None)
+    scaling_axis = choose_scaling_x_axis(runs, x_axis_request)
+    labels = plot_series_labels(args.kind, runs, overrides, scaling_axis)
     percent_difference_rows = (
         percent_difference_rows_for_plot(runs)
         if args.kind == "percent-difference"
@@ -997,6 +1283,7 @@ def command_plot(args: argparse.Namespace) -> int:
         )
 
     fig, ax = plt.subplots()
+    style_kwargs = apply_plot_style(plt, ax, style, len(runs))
     if args.kind in ("latency", "effective-rate"):
         for run, label in zip(runs, labels):
             ordered = sorted(run.results, key=lambda item: item.halo_words)
@@ -1006,8 +1293,8 @@ def command_plot(args: argparse.Namespace) -> int:
                 ax.set_ylabel("Maximum Average Exchange Time (µs)")
             else:
                 y = [effective_gib_per_second(result) for result in ordered]
-                ax.set_ylabel("per-rank effective transferred-byte rate (GiB/s)")
-            ax.plot(x, y, marker="o", label=label)
+                ax.set_ylabel("Per-rank Effective Transferred-Byte Rate (GiB/s)")
+            ax.plot(x, y, marker="o", label=label, **style_kwargs)
         ax.set_xlabel("Halo Length (elements)")
         set_halo_ticks(ax, runs)
     elif args.kind == "scaling":
@@ -1015,11 +1302,18 @@ def command_plot(args: argparse.Namespace) -> int:
         rows = scaling_rows(runs, baseline)
         for halo in sorted({row["halo_words"] for row in rows}):
             series = [row for row in rows if row["halo_words"] == halo]
-            x = [row["nodes"] or row["ranks"] for row in series]
+            x = [
+                row["nodes"] if scaling_axis == "nodes" else row["ranks"]
+                for row in series
+            ]
             y = [row["time_microseconds"] for row in series]
-            ax.plot(x, y, marker="o", label=f"N={halo}")
-        ax.set_xlabel("nodes or ranks")
-        ax.set_ylabel("max average time (microseconds)")
+            ax.plot(x, y, marker="o", label=f"N={halo}", **style_kwargs)
+        tick_values = power_of_two_ticks([int(row["nodes"] if scaling_axis == "nodes" else row["ranks"]) for row in rows])
+        if tick_values:
+            ax.set_xticks(tick_values)
+            ax.set_xticklabels([str(value) for value in tick_values])
+        ax.set_xlabel(scaling_axis_label(runs, scaling_axis))
+        ax.set_ylabel("Maximum Average Exchange Time (µs)")
     elif args.kind == "percent-difference":
         draw_percent_difference_plot(ax, percent_difference_rows or [])
         set_halo_ticks(ax, runs)
@@ -1042,12 +1336,18 @@ def command_plot(args: argparse.Namespace) -> int:
     xscale = "linear" if args.kind == "phase" and args.xscale == "log2" else args.xscale
     apply_axis_scale(ax, "x", xscale)
     apply_axis_scale(ax, "y", args.yscale)
-    ax.grid(True, which="both", alpha=0.25)
     ax.set_title(args.title or default_plot_title(args.kind, runs))
-    ax.legend()
+    place_legend(ax, legend_position, style, len(runs))
     fig.tight_layout()
     output = args.output or f"{args.kind}.png"
-    fig.savefig(output, dpi=args.dpi)
+    output_path = Path(output)
+    ensure_output_parent(output_path)
+    fmt = output_format_for(output, output_format)
+    dpi = output_dpi(style, fmt, requested_dpi)
+    save_kwargs: Dict[str, Any] = {"format": fmt}
+    if dpi is not None:
+        save_kwargs["dpi"] = dpi
+    fig.savefig(output_path, **save_kwargs)
     return 0
 
 
@@ -1107,6 +1407,144 @@ def write_analysis_directory(output_root: str, runs: List[Run]) -> None:
     (output_dir / "provenance.json").write_text(json.dumps(provenance, indent=2), encoding="utf-8")
 
 
+def analysis_git_commit() -> str:
+    if os.environ.get("GITHUB_SHA"):
+        return os.environ["GITHUB_SHA"]
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parents[1],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return ""
+    return completed.stdout.strip() if completed.returncode == 0 else ""
+
+
+def write_report_directory(args: argparse.Namespace, runs: List[Run]) -> List[str]:
+    output_dir = Path(args.output_dir)
+    if output_dir.exists() and not output_dir.is_dir():
+        raise AnalysisError(f"report output path exists but is not a directory: {output_dir}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if not os.access(output_dir, os.W_OK):
+        raise AnalysisError(f"report output directory is not writable: {output_dir}")
+    plots_dir = output_dir / "plots"
+    plots_dir.mkdir(exist_ok=True)
+
+    skipped: List[str] = []
+    summary = [row for run in runs for row in summary_rows(run, True, True)]
+    (output_dir / "summary.csv").write_text(rows_to_csv(summary), encoding="utf-8")
+    (output_dir / "summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    baseline = choose_baseline(args, runs)
+    scaling = scaling_rows(runs, baseline)
+    (output_dir / "scaling.csv").write_text(rows_to_csv(scaling), encoding="utf-8")
+
+    if len(runs) == 2:
+        try:
+            comparison = compare_rows(runs[0], runs[1], allow_missing=False)
+            (output_dir / "comparison.csv").write_text(
+                rows_to_csv(comparison),
+                encoding="utf-8",
+            )
+        except AnalysisError as error:
+            skipped.append(f"comparison.csv: {error}")
+    else:
+        skipped.append("comparison.csv: requires exactly two compatible repeat runs")
+
+    plot_requests = [
+        ("latency", plots_dir / "latency.png"),
+        ("effective-rate", plots_dir / "effective-rate.png"),
+        ("scaling", plots_dir / "scaling.png"),
+    ]
+    if len(runs) == 2:
+        plot_requests.append(("percent-difference", plots_dir / "percent-difference.png"))
+    if any(run.phase_timing_enabled for run in runs):
+        plot_requests.append(("phase", plots_dir / "phase.png"))
+
+    for kind, output in plot_requests:
+        plot_inputs = [str(run.result_path) for run in runs]
+        if kind == "phase":
+            phase_run = next(run for run in runs if run.phase_timing_enabled)
+            plot_inputs = [str(phase_run.result_path)]
+        plot_args = argparse.Namespace(
+            kind=kind,
+            xscale="log2",
+            yscale="linear",
+            x_axis=args.x_axis,
+            style=args.style,
+            format="png",
+            legend_position=args.legend_position,
+            title=None,
+            label=[],
+            labels=None,
+            output=str(output),
+            dpi=args.dpi,
+            baseline=args.baseline,
+            baseline_path=args.baseline_path,
+            baseline_nodes=args.baseline_nodes,
+            inputs=plot_inputs,
+        )
+        try:
+            command_plot(plot_args)
+        except AnalysisError as error:
+            skipped.append(f"{output.relative_to(output_dir)}: {error}")
+
+    provenance = {
+        "input_paths": [str(run.input_path) for run in runs],
+        "input_checksums": {str(run.input_path): checksum(run.input_path) for run in runs},
+        "analysis_command": sys.argv,
+        "analysis_tool_git_commit": analysis_git_commit(),
+        "generation_time_utc": datetime.now(timezone.utc).isoformat(),
+        "python_version": platform.python_version(),
+        "matplotlib_version": matplotlib_version(),
+        "skipped_outputs": skipped,
+    }
+    (output_dir / "provenance.json").write_text(
+        json.dumps(provenance, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    lines = [
+        "# gHALO Analysis Report",
+        "",
+        f"Generated: {provenance['generation_time_utc']}",
+        "",
+        "## Inputs",
+        "",
+    ]
+    lines.extend(f"- `{path}`" for path in provenance["input_paths"])
+    lines.extend(
+        [
+            "",
+            "## Outputs",
+            "",
+            "- `summary.csv`",
+            "- `summary.json`",
+            "- `scaling.csv`",
+        ]
+    )
+    if (output_dir / "comparison.csv").exists():
+        lines.append("- `comparison.csv`")
+    lines.append("- `plots/` when matplotlib is available")
+    lines.extend(["", "## Skipped Outputs", ""])
+    lines.extend(f"- {item}" for item in skipped) if skipped else lines.append("- None")
+    (output_dir / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return skipped
+
+
+def command_report(args: argparse.Namespace) -> int:
+    runs = load_runs(args.inputs)
+    write_report_directory(args, runs)
+    write_warnings(runs)
+    return 0
+
+
 def matplotlib_version() -> str:
     try:
         import matplotlib
@@ -1162,16 +1600,32 @@ def build_parser() -> argparse.ArgumentParser:
     plot.add_argument("--kind", choices=("latency", "effective-rate", "scaling", "phase", "percent-difference"), default="latency")
     plot.add_argument("--xscale", choices=("linear", "log2", "log10"), default="log2")
     plot.add_argument("--yscale", choices=("linear", "log10"), default="linear")
+    plot.add_argument("--x-axis", choices=("nodes", "ranks", "auto"), default="auto")
+    plot.add_argument("--style", choices=("default", "publication"), default="default")
+    plot.add_argument("--format", choices=("png", "pdf", "svg"))
+    plot.add_argument("--legend-position", choices=("auto", "inside", "outside"), default="auto")
     plot.add_argument("--title")
     plot.add_argument("--label", action="append", default=[])
     plot.add_argument("--labels")
     plot.add_argument("--output")
-    plot.add_argument("--dpi", type=int, default=120)
+    plot.add_argument("--dpi", type=int)
     plot.add_argument("--baseline", default="smallest-nodes")
     plot.add_argument("--baseline-path")
     plot.add_argument("--baseline-nodes", type=int)
     plot.add_argument("inputs", nargs="+")
     plot.set_defaults(func=command_plot)
+
+    report = subparsers.add_parser("report", help="generate an analysis bundle")
+    report.add_argument("--output-dir", required=True)
+    report.add_argument("--style", choices=("default", "publication"), default="default")
+    report.add_argument("--x-axis", choices=("nodes", "ranks", "auto"), default="auto")
+    report.add_argument("--legend-position", choices=("auto", "inside", "outside"), default="auto")
+    report.add_argument("--dpi", type=int)
+    report.add_argument("--baseline", default="smallest-nodes")
+    report.add_argument("--baseline-path")
+    report.add_argument("--baseline-nodes", type=int)
+    report.add_argument("inputs", nargs="+")
+    report.set_defaults(func=command_report)
 
     return parser
 

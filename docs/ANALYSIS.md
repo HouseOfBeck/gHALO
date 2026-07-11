@@ -165,6 +165,13 @@ the local halo message size is held constant while the participating rank count
 changes. Prefer terms such as fixed-message-size scaling, latency scaling, or
 scale-dependent slowdown.
 
+For scaling campaigns with a constant number of GPU ranks per node, node count
+is usually the clearest x-axis because it exposes system-scale effects while
+keeping the rank layout readable. Rank count remains available with
+`--x-axis ranks` when node metadata is missing or when comparing layouts that do
+not keep ranks per node constant. The analyzer never guesses node count from
+rank count alone.
+
 ## Plotting
 
 Plotting is optional:
@@ -176,33 +183,58 @@ python3 tools/ghalo_analyze.py plot \
   results/frontier/*frontier-64node*
 ```
 
-Repeatability plots can use explicit labels:
+Frontier scaling by node count:
 
 ```sh
 python3 tools/ghalo_analyze.py plot \
-  --kind latency \
-  --xscale log2 \
-  --labels "Run 1,Run 2" \
-  --output frontier-64node-repeatability.png \
-  RUN_1 RUN_2
+  --kind scaling \
+  --x-axis nodes \
+  --style publication \
+  --output analysis/plots/frontier-scaling-run2.pdf \
+  results/frontier/*scaling-*run2*
 ```
 
-Equivalent repeated label options are also accepted:
+Effective transferred-byte rate:
+
+```sh
+python3 tools/ghalo_analyze.py plot \
+  --kind effective-rate \
+  --style publication \
+  --output analysis/plots/frontier-effective-rate-run2.pdf \
+  results/frontier/*scaling-*run2*
+```
+
+64-node repeatability with explicit labels:
 
 ```sh
 python3 tools/ghalo_analyze.py plot \
   --kind latency \
   --label "Run 1" \
   --label "Run 2" \
+  --style publication \
+  --output analysis/plots/frontier-64node-repeatability.pdf \
   RUN_1 RUN_2
 ```
 
-Observed percent-difference plots compare exactly two compatible runs:
+Observed difference between two repeat runs:
 
 ```sh
 python3 tools/ghalo_analyze.py plot \
   --kind percent-difference \
-  --output frontier-64node-percent-difference.png \
+  --label "Run 1" \
+  --label "Run 2" \
+  --style publication \
+  --output analysis/plots/frontier-64node-difference.pdf \
+  RUN_1 RUN_2
+```
+
+Comma-separated labels are also accepted:
+
+```sh
+python3 tools/ghalo_analyze.py plot \
+  --kind latency \
+  --labels "Run 1,Run 2" \
+  --output frontier-64node-repeatability.png \
   RUN_1 RUN_2
 ```
 
@@ -218,12 +250,33 @@ Supported plot kinds:
   `100 * (time_B - time_A) / time_A` versus halo length for two compatible
   runs, with a zero reference line.
 
+Scaling plots support:
+
+```text
+--x-axis auto|nodes|ranks
+```
+
+`auto` uses nodes when all inputs have known node counts and falls back to
+ranks otherwise. The axis label is explicit: `Node Count` or
+`GPU Rank Count`. It is never labeled "nodes or ranks."
+
 Latency plots default to a log2 halo-length axis, measured halo sizes as tick
 labels, markers at every measured point, and a light grid. Supported scales are
 `linear`, `log2`, and `log10` where applicable. Plots do not smooth or
 interpolate data. This is intentional: non-monotonic behavior can indicate real
 topology, routing, synchronization, or congestion effects and should remain
 visible.
+
+Effective-rate plots use the label
+`Per-rank Effective Transferred-Byte Rate (GiB/s)`. This value remains the
+derived rate:
+
+```text
+bytes_per_rank / maximum_average_exchange_seconds
+```
+
+It is not NIC bandwidth, injection bandwidth, aggregate network bandwidth, or
+physical-link bandwidth.
 
 Automatic legend labels use active-system metadata, node count, and rank count
 instead of timestamp-heavy directory names. For example, Borg runs remain
@@ -232,16 +285,68 @@ alias mechanism. Full source paths and timestamps remain available in result
 directories and analysis provenance.
 
 When `--title` is not supplied, plots derive a concise title from backend,
-active system, node count, and rank count. A repeated Frontier MPI-HIP run may
-therefore produce a title such as:
+active system, node count, rank count, and ranks per node. A repeated Frontier
+MPI-HIP run may produce:
 
 ```text
 gHALO MPI-HIP Repeatability
-Frontier, 64 Nodes, 512 GPU Ranks
+Frontier — 64 Nodes — 512 GPU Ranks
 ```
+
+A Frontier scaling campaign with constant rank layout may produce:
+
+```text
+gHALO MPI-HIP Scaling
+Frontier — 8 GPU Ranks per Node
+```
+
+`--style publication` increases font size, line width, marker size, DPI, and
+uses a high-contrast color cycle with restrained grid lines. `--format` may be
+`png`, `pdf`, or `svg`; when omitted, the format is inferred from the output
+extension. Publication PNG output defaults to 600 DPI unless `--dpi` is
+provided. PDF and SVG outputs are vector formats. `--legend-position` accepts
+`auto`, `inside`, or `outside`.
 
 If `matplotlib` is unavailable, the plot command fails clearly and the textual,
 CSV, JSON, and Markdown commands continue to work.
+
+## Report Generation
+
+The optional `report` subcommand creates a modest one-command analysis bundle:
+
+```sh
+python3 tools/ghalo_analyze.py report \
+  --style publication \
+  --output-dir analysis/frontier-scaling-run2 \
+  results/frontier/*scaling-*run2*
+```
+
+The report command writes, as applicable:
+
+```text
+analysis/frontier-scaling-run2/
+  report.md
+  summary.csv
+  summary.json
+  scaling.csv
+  comparison.csv
+  plots/
+    latency.png
+    effective-rate.png
+    scaling.png
+    percent-difference.png
+    phase.png
+  provenance.json
+```
+
+Skipped outputs and reasons are listed in `report.md` and `provenance.json`.
+The command records exact input paths, input checksums, the analysis command,
+UTC generation time, Python version, Git commit, and matplotlib version when
+available. Source result directories are never modified.
+
+Single-run comparisons and percent-difference plots are observed differences,
+not statistical conclusions. Positive percent differences mean run B was slower
+than run A; negative values mean run B was faster.
 
 ## Phase Timing
 

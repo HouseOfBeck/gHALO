@@ -7,6 +7,7 @@ import builtins
 import contextlib
 import io
 import json
+import tempfile
 import sys
 import unittest
 from argparse import Namespace
@@ -31,6 +32,9 @@ class FakeAxis:
         self.ylabel = ""
         self.xticks = []
         self.xticklabels = []
+        self.grid_calls = []
+        self.legend_calls = []
+        self.title = ""
 
     def set_xscale(self, *args, **kwargs):
         self.xscale = (args, kwargs)
@@ -56,6 +60,85 @@ class FakeAxis:
     def set_xticklabels(self, labels):
         self.xticklabels = labels
 
+    def grid(self, *args, **kwargs):
+        self.grid_calls.append((args, kwargs))
+
+    def legend(self, *args, **kwargs):
+        self.legend_calls.append((args, kwargs))
+
+    def set_title(self, title):
+        self.title = title
+
+
+def write_result_dir(
+    root: Path,
+    name: str,
+    *,
+    system: str = "frontier",
+    build_system: str = "frontier",
+    backend: str = "MPIHIPBackend",
+    memory: str = "device",
+    ranks: int = 8,
+    rows: int = 2,
+    cols: int = 4,
+    nodes_metadata=None,
+    ranks_per_node_metadata=None,
+    metadata_files=None,
+    timings=None,
+) -> Path:
+    path = root / name
+    path.mkdir(parents=True)
+    timings = timings or {2: 1.0e-5, 4: 2.0e-5}
+    results = []
+    for halo, seconds in timings.items():
+        metadata = {
+            "memory_location": memory,
+            "ranks": [],
+        }
+        if nodes_metadata is not None:
+            metadata["nodes"] = nodes_metadata
+        if ranks_per_node_metadata is not None:
+            metadata["ranks_per_node"] = ranks_per_node_metadata
+        results.append(
+            {
+                "backend": backend,
+                "algorithm": "mpi-hip-sendrecv" if "HIP" in backend else "mpi-sendrecv",
+                "halo_words": halo,
+                "word_bytes": 4,
+                "n_message_bytes": halo * 4,
+                "two_n_message_bytes": halo * 8,
+                "total_exchange_bytes_per_rank": halo * 24,
+                "iterations": 100,
+                "max_total_seconds": seconds * 100,
+                "max_average_seconds": seconds,
+                "metadata": metadata,
+                "topology": {
+                    "world_size": ranks,
+                    "world_rank": 0,
+                    "cart_rank": 0,
+                    "rows": rows,
+                    "cols": cols,
+                    "row": 0,
+                    "col": 0,
+                    "north": cols,
+                    "south": cols,
+                    "east": 1,
+                    "west": cols - 1,
+                },
+            }
+        )
+    (path / "ghalo.json").write_text(
+        json.dumps({"version": "0.3.0", "results": results}),
+        encoding="utf-8",
+    )
+    (path / "system-resolution.txt").write_text(
+        f"active_system={system}\nbuild_system={build_system}\nbackend=mpi-hip\n",
+        encoding="utf-8",
+    )
+    for filename, text in (metadata_files or {}).items():
+        (path / filename).write_text(text, encoding="utf-8")
+    return path
+
 
 class GhaloAnalyzeTests(unittest.TestCase):
     def test_json_parsing_and_metadata(self) -> None:
@@ -68,6 +151,82 @@ class GhaloAnalyzeTests(unittest.TestCase):
         self.assertEqual(run.ranks, 4)
         self.assertEqual(run.cartesian, "2x2")
         self.assertEqual(run.results[0].metadata["memory_location"], "host")
+
+    def test_node_count_metadata_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            json_run = analyze.load_run(
+                str(write_result_dir(root, "json", nodes_metadata=4, ranks=32))
+            )
+            self.assertEqual(json_run.nodes, 4)
+            self.assertEqual(json_run.ranks_per_node, 8)
+
+            submission_run = analyze.load_run(
+                str(
+                    write_result_dir(
+                        root,
+                        "submission",
+                        ranks=16,
+                        metadata_files={"submission.txt": "nodes=2\n"},
+                    )
+                )
+            )
+            self.assertEqual(submission_run.nodes, 2)
+
+            slurm_run = analyze.load_run(
+                str(
+                    write_result_dir(
+                        root,
+                        "slurm",
+                        ranks=64,
+                        metadata_files={"slurm-job.txt": "JobId=1 NodeCnt=8"},
+                    )
+                )
+            )
+            self.assertEqual(slurm_run.nodes, 8)
+
+            env_run = analyze.load_run(
+                str(
+                    write_result_dir(
+                        root,
+                        "env",
+                        ranks=128,
+                        metadata_files={"environment.txt": "SLURM_JOB_NUM_NODES=16\n"},
+                    )
+                )
+            )
+            self.assertEqual(env_run.nodes, 16)
+
+    def test_node_count_safe_derivation_and_unknown_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            derived = analyze.load_run(
+                str(write_result_dir(root, "derived", ranks=32, ranks_per_node_metadata=8))
+            )
+            self.assertEqual(derived.nodes, 4)
+            self.assertEqual(derived.ranks_per_node, 8)
+
+            unknown = analyze.load_run(str(write_result_dir(root, "unknown", ranks=7)))
+            self.assertIsNone(unknown.nodes)
+            self.assertTrue(any("node count is unknown" in item for item in unknown.warnings))
+
+    def test_active_system_and_build_system_are_separate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run = analyze.load_run(
+                str(
+                    write_result_dir(
+                        Path(tmp),
+                        "borg",
+                        system="borg",
+                        build_system="frontier",
+                        nodes_metadata=2,
+                        ranks=16,
+                    )
+                )
+            )
+            self.assertEqual(run.system, "borg")
+            self.assertEqual(run.build_system, "frontier")
+            self.assertEqual(run.label, "Borg | 2 nodes | 16 GPU ranks")
 
     def test_csv_fallback(self) -> None:
         run = analyze.load_run(str(DATA / "csv_only"))
@@ -146,9 +305,11 @@ class GhaloAnalyzeTests(unittest.TestCase):
             allow_mixed=False,
             group_by=[],
         )
-        self.assertEqual(rows[0]["group"], "Frontier | 1 node | 8 GPU ranks | repeat")
+        self.assertEqual(rows[0]["group"], "Frontier | MPI-HIP | 1 node | 8 ranks | 2x4")
         self.assertNotIn("((", rows[0]["group"])
         self.assertEqual(rows[0]["group_backend"], "MPIHIPBackend")
+        self.assertEqual(rows[0]["group_active_system"], "frontier")
+        self.assertEqual(rows[0]["group_ranks_per_node"], 8)
         self.assertIn("N=2:48B/rank", rows[0]["group_bytes_per_rank_by_halo"])
 
     def test_scaling_baseline_logic(self) -> None:
@@ -207,6 +368,19 @@ class GhaloAnalyzeTests(unittest.TestCase):
         )
         self.assertEqual(args.xscale, "log2")
 
+    def test_scaling_x_axis_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            one = analyze.load_run(str(write_result_dir(root, "one", nodes_metadata=1, ranks=8)))
+            two = analyze.load_run(str(write_result_dir(root, "two", nodes_metadata=2, ranks=16)))
+            unknown = analyze.load_run(str(write_result_dir(root, "unknown", ranks=16)))
+
+            self.assertEqual(analyze.choose_scaling_x_axis([one, two], "auto"), "nodes")
+            self.assertEqual(analyze.choose_scaling_x_axis([one, unknown], "auto"), "ranks")
+            with self.assertRaisesRegex(analyze.AnalysisError, "known node counts"):
+                analyze.choose_scaling_x_axis([one, unknown], "nodes")
+            self.assertEqual(analyze.power_of_two_ticks([1, 2, 4, 8]), [1, 2, 4, 8])
+
     def test_default_plot_title_uses_metadata(self) -> None:
         title = analyze.default_plot_title(
             "latency",
@@ -220,6 +394,44 @@ class GhaloAnalyzeTests(unittest.TestCase):
         self.assertIn("1 Node", title)
         self.assertIn("8 GPU Ranks", title)
 
+    def test_scaling_and_effective_rate_titles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runs = [
+                analyze.load_run(str(write_result_dir(root, "one", nodes_metadata=1, ranks=8))),
+                analyze.load_run(str(write_result_dir(root, "two", nodes_metadata=2, ranks=16))),
+            ]
+            scaling_title = analyze.default_plot_title("scaling", runs)
+            self.assertIn("gHALO MPI-HIP Scaling", scaling_title)
+            self.assertIn("Frontier", scaling_title)
+            self.assertIn("8 GPU Ranks per Node", scaling_title)
+            rate_title = analyze.default_plot_title("effective-rate", runs)
+            self.assertIn("Effective Transferred-Byte Rate", rate_title)
+
+    def test_concise_legend_labels_and_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            one = analyze.load_run(str(write_result_dir(root, "one", nodes_metadata=1, ranks=8)))
+            two = analyze.load_run(str(write_result_dir(root, "two", nodes_metadata=2, ranks=16)))
+            labels = analyze.plot_series_labels("latency", [one, two], [None, None], "nodes")
+            self.assertEqual(labels, ["1 node (8 GPU ranks)", "2 nodes (16 GPU ranks)"])
+            self.assertEqual(
+                analyze.label_overrides(
+                    Namespace(label=["Run 1", "Run 2"], labels=None),
+                    2,
+                ),
+                ["Run 1", "Run 2"],
+            )
+            self.assertEqual(
+                analyze.label_overrides(
+                    Namespace(label=[], labels="Run 1,Run 2"),
+                    2,
+                ),
+                ["Run 1", "Run 2"],
+            )
+            with self.assertRaisesRegex(analyze.AnalysisError, "label override"):
+                analyze.label_overrides(Namespace(label=["Run 1"], labels=None), 2)
+
     def test_percent_difference_plot_rows_and_zero_reference(self) -> None:
         runs = [
             analyze.load_run(str(DATA / "repeat_a")),
@@ -227,13 +439,83 @@ class GhaloAnalyzeTests(unittest.TestCase):
         ]
         rows = analyze.percent_difference_rows_for_plot(runs)
         self.assertAlmostEqual(rows[0]["observed_percent_difference"], 10.0)
+        faster_rows = analyze.percent_difference_rows_for_plot(list(reversed(runs)))
+        self.assertLess(faster_rows[0]["observed_percent_difference"], 0.0)
 
         axis = FakeAxis()
         analyze.draw_percent_difference_plot(axis, rows)
         self.assertEqual(axis.plots[0][0][0], [2, 4])
         self.assertAlmostEqual(axis.plots[0][0][1][0], 10.0)
         self.assertEqual(axis.hlines[0][0][0], 0.0)
-        self.assertEqual(axis.ylabel, "Observed Percent Difference")
+        self.assertEqual(axis.ylabel, "Observed Difference (%)")
+
+    def test_publication_option_parsing_and_output_format(self) -> None:
+        args = analyze.build_parser().parse_args(
+            [
+                "plot",
+                "--kind",
+                "scaling",
+                "--x-axis",
+                "nodes",
+                "--style",
+                "publication",
+                "--format",
+                "pdf",
+                "--legend-position",
+                "outside",
+                str(DATA / "repeat_a"),
+            ]
+        )
+        self.assertEqual(args.style, "publication")
+        self.assertEqual(args.format, "pdf")
+        self.assertEqual(args.legend_position, "outside")
+        self.assertEqual(analyze.output_format_for("plot.svg", None), "svg")
+        self.assertEqual(analyze.output_format_for("plot.dat", "pdf"), "pdf")
+        self.assertEqual(analyze.output_dpi("publication", "png", None), 600)
+        self.assertIsNone(analyze.output_dpi("publication", "pdf", None))
+
+    def test_output_directory_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "analysis" / "plots" / "summary.json"
+            analyze.write_output([{"ok": True}], "json", str(output))
+            self.assertTrue(output.exists())
+
+    def test_report_output_manifest_without_matplotlib(self) -> None:
+        real_import = builtins.__import__
+
+        def blocked_import(name, *args, **kwargs):
+            if name == "matplotlib" or name.startswith("matplotlib."):
+                raise ImportError("blocked for test")
+            return real_import(name, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            one = write_result_dir(root, "one", nodes_metadata=1, ranks=8)
+            two = write_result_dir(root, "two", nodes_metadata=2, ranks=16)
+            output_dir = root / "report"
+            args = Namespace(
+                output_dir=str(output_dir),
+                style="publication",
+                x_axis="auto",
+                legend_position="auto",
+                dpi=None,
+                baseline="smallest-nodes",
+                baseline_path=None,
+                baseline_nodes=None,
+                inputs=[str(one), str(two)],
+            )
+            with mock.patch("builtins.__import__", side_effect=blocked_import):
+                skipped = analyze.write_report_directory(
+                    args,
+                    [analyze.load_run(str(one)), analyze.load_run(str(two))],
+                )
+            self.assertTrue((output_dir / "report.md").exists())
+            self.assertTrue((output_dir / "summary.csv").exists())
+            self.assertTrue((output_dir / "summary.json").exists())
+            self.assertTrue((output_dir / "scaling.csv").exists())
+            provenance = json.loads((output_dir / "provenance.json").read_text())
+            self.assertTrue(provenance["skipped_outputs"])
+            self.assertTrue(skipped)
 
     def test_percent_difference_requires_exactly_two_inputs(self) -> None:
         run = analyze.load_run(str(DATA / "repeat_a"))
