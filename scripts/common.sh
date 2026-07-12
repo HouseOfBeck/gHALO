@@ -156,6 +156,10 @@ ghalo_capture_environment() {
       ROCM_PATH \
       RCCL_ROOT \
       RCCL_PATH \
+      OLCF_OFI_NCCL_ROOT \
+      GHALO_LOADED_ROCM_MODULE \
+      GHALO_RESOLVED_HIP_COMPILER \
+      GHALO_RESOLVED_RCCL_LIBRARY \
       HIP_PATH \
       ROCR_VISIBLE_DEVICES \
       HIP_VISIBLE_DEVICES \

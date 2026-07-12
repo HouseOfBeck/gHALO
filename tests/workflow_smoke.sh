@@ -191,6 +191,150 @@ test_borg_environment_setup() (
   assert_contains 'loaded' "${rocm_marker}" "Borg ROCm 6.2.4 load"
 )
 
+# This test mocks Borg modules inside a subshell to verify backend-specific
+# ROCm selection without requiring OLCF modules on the local workstation.
+# shellcheck disable=SC2030,SC2031
+test_borg_backend_specific_rocm_selection() (
+  local bin_dir="${GHALO_TEST_TMPDIR}/ghalo-borg-backend-bin"
+  local rocm624="${GHALO_TEST_TMPDIR}/opt/rocm-6.2.4"
+  local rocm642="${GHALO_TEST_TMPDIR}/opt/rocm-6.4.2"
+  local plugin_root="${GHALO_TEST_TMPDIR}/opt/rccl-net-plugin-1.0"
+  local module_log="${GHALO_TEST_TMPDIR}/ghalo-borg-module-log.txt"
+  local base_path
+  mkdir -p "${bin_dir}" "${rocm624}/bin" "${rocm642}/bin" \
+    "${rocm642}/include/rccl" "${rocm642}/lib" "${plugin_root}"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"${bin_dir}/CC"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"${rocm624}/bin/hipcc"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"${rocm642}/bin/hipcc"
+  : >"${rocm642}/include/rccl/rccl.h"
+  : >"${rocm642}/lib/librccl.so"
+  chmod +x "${bin_dir}/CC" "${rocm624}/bin/hipcc" "${rocm642}/bin/hipcc"
+  export PATH="${bin_dir}:${PATH}"
+  base_path="${PATH}"
+
+  # The mock is called indirectly by scripts/systems/borg.sh.
+  # shellcheck disable=SC2317
+  module() {
+    printf '%s %s\n' "$1" "${2:-}" >>"${module_log}"
+    case "$1" in
+      load)
+        case "$2" in
+          PrgEnv-cray | craype-accel-amd-gfx90a)
+            return 0
+            ;;
+          rocm/6.2.4)
+            export ROCM_PATH="${rocm624}"
+            export PATH="${rocm624}/bin:${base_path}"
+            unset OLCF_OFI_NCCL_ROOT
+            return 0
+            ;;
+          rocm/6.4.2)
+            export ROCM_PATH="${rocm642}"
+            export PATH="${rocm642}/bin:${base_path}"
+            return 0
+            ;;
+          rccl-net-plugin/1.0)
+            export OLCF_OFI_NCCL_ROOT="${plugin_root}"
+            return 0
+            ;;
+        esac
+        ;;
+      unload)
+        if [[ "${2:-}" == rocm* ]]; then
+          unset ROCM_PATH
+          export PATH="${base_path}"
+          return 0
+        fi
+        ;;
+    esac
+    return 1
+  }
+
+  # shellcheck source=../scripts/systems/borg.sh
+  source "${ROOT}/scripts/systems/borg.sh"
+
+  ghalo_system_setup_build mpi-hip
+  assert_eq rocm/6.2.4 "${GHALO_LOADED_ROCM_MODULE}" \
+    "Borg mpi-hip selects ROCm 6.2.4"
+  assert_eq "${rocm624}" "${ROCM_PATH}" "Borg mpi-hip ROCM_PATH"
+  if [[ -n "${OLCF_OFI_NCCL_ROOT+x}" ]]; then
+    printf 'Borg mpi-hip setup should not load rccl-net-plugin/1.0\n' >&2
+    exit 1
+  fi
+
+  ghalo_system_setup_build rccl
+  assert_eq rocm/6.4.2 "${GHALO_LOADED_ROCM_MODULE}" \
+    "Borg rccl selects ROCm 6.4.2"
+  assert_eq "${rocm642}" "${ROCM_PATH}" "Borg rccl ROCM_PATH"
+  assert_eq "${rocm642}" "${RCCL_ROOT}" "Borg rccl RCCL_ROOT"
+  assert_eq "${plugin_root}" "${OLCF_OFI_NCCL_ROOT}" \
+    "Borg rccl loads OFI plugin"
+  assert_eq "${rocm642}/bin/hipcc" "${GHALO_RESOLVED_HIP_COMPILER}" \
+    "Borg rccl resolved hipcc"
+  assert_eq "${rocm642}/lib/librccl.so" "${GHALO_RESOLVED_RCCL_LIBRARY}" \
+    "Borg rccl resolved librccl"
+  assert_contains 'load rccl-net-plugin/1.0' "${module_log}" \
+    "Borg rccl loads rccl-net-plugin"
+)
+
+# This test intentionally mutates PATH and ROCm-related variables inside a
+# subshell while validating mixed-version failure handling.
+# shellcheck disable=SC2030,SC2031
+test_borg_rccl_mixed_rocm_versions_fail() (
+  local bin_dir="${GHALO_TEST_TMPDIR}/ghalo-borg-mixed-bin"
+  local rocm624="${GHALO_TEST_TMPDIR}/mixed/rocm-6.2.4"
+  local rocm642="${GHALO_TEST_TMPDIR}/mixed/rocm-6.4.2"
+  local plugin_root="${GHALO_TEST_TMPDIR}/mixed/rccl-net-plugin-1.0"
+  local output="${GHALO_TEST_TMPDIR}/ghalo-borg-mixed-rocm.txt"
+  local base_path
+  mkdir -p "${bin_dir}" "${rocm624}/bin" "${rocm642}/include/rccl" \
+    "${rocm642}/lib" "${plugin_root}"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"${bin_dir}/CC"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"${rocm624}/bin/hipcc"
+  : >"${rocm642}/include/rccl/rccl.h"
+  : >"${rocm642}/lib/librccl.so"
+  chmod +x "${bin_dir}/CC" "${rocm624}/bin/hipcc"
+  export PATH="${bin_dir}:${rocm624}/bin:${PATH}"
+  base_path="${PATH}"
+
+  # The mock is called indirectly by scripts/systems/borg.sh.
+  # shellcheck disable=SC2317
+  module() {
+    case "$1" in
+      load)
+        case "$2" in
+          PrgEnv-cray | craype-accel-amd-gfx90a)
+            return 0
+            ;;
+          rocm/6.4.2)
+            export ROCM_PATH="${rocm642}"
+            export PATH="${base_path}"
+            return 0
+            ;;
+          rccl-net-plugin/1.0)
+            export OLCF_OFI_NCCL_ROOT="${plugin_root}"
+            return 0
+            ;;
+        esac
+        ;;
+      unload)
+        return 0
+        ;;
+    esac
+    return 1
+  }
+
+  # shellcheck source=../scripts/systems/borg.sh
+  source "${ROOT}/scripts/systems/borg.sh"
+
+  if (ghalo_system_setup_build rccl) >"${output}" 2>&1; then
+    printf 'expected mixed Borg RCCL ROCm setup to fail\n' >&2
+    exit 1
+  fi
+  assert_contains 'mixed ROCm configuration' "${output}" \
+    "Borg rccl rejects mixed ROCm versions"
+)
+
 test_submit_dry_run() (
   local output="${GHALO_TEST_TMPDIR}/ghalo-submit-dry-run.txt"
   GHALO_SYSTEM_NAME=frontier "${ROOT}/scripts/submit.sh" \
@@ -299,6 +443,8 @@ test_backend_validation_accepts_rccl
 test_borg_rccl_uses_frontier_build_alias
 test_frontier_rccl_cmake_args
 test_borg_environment_setup
+test_borg_backend_specific_rocm_selection
+test_borg_rccl_mixed_rocm_versions_fail
 test_submit_dry_run
 test_submit_rank_layout_failure
 test_batch_job_requires_slurm

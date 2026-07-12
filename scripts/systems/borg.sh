@@ -6,7 +6,7 @@ ghalo_borg_have_modules() {
 
 ghalo_borg_require_modules() {
   ghalo_borg_have_modules ||
-    ghalo_die "Borg GPU backend runs require environment modules to load rocm/6.2.4"
+    ghalo_die "Borg GPU backend runs require environment modules"
 }
 
 ghalo_borg_load_common() {
@@ -23,6 +23,95 @@ ghalo_borg_load_gpu() {
     ghalo_die "failed to load craype-accel-amd-gfx90a on Borg"
   module load rocm/6.2.4 ||
     ghalo_die "failed to load required Borg ROCm module rocm/6.2.4"
+  export GHALO_LOADED_ROCM_MODULE=rocm/6.2.4
+}
+
+ghalo_borg_unload_rocm() {
+  ghalo_borg_require_modules
+  module unload rocm >/dev/null 2>&1 || true
+  module unload rocm/6.2.4 >/dev/null 2>&1 || true
+  module unload rocm/6.4.2 >/dev/null 2>&1 || true
+}
+
+ghalo_borg_rccl_header_exists() {
+  local root="$1"
+  [[ -f "${root}/include/rccl/rccl.h" ||
+     -f "${root}/include/rccl.h" ||
+     -f "${root}/include/nccl.h" ]]
+}
+
+ghalo_borg_resolve_rccl_library() {
+  local root="$1"
+  local candidate
+  for candidate in \
+    "${root}/lib/librccl.so" \
+    "${root}/lib64/librccl.so" \
+    "${root}/lib/librccl.so.1" \
+    "${root}/lib64/librccl.so.1"; do
+    if [[ -e "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+ghalo_borg_path_matches_rocm_version() {
+  local path="$1"
+  local version="$2"
+  [[ "${path}" == *"rocm-${version}"* || "${path}" == *"rocm/${version}"* ]]
+}
+
+ghalo_borg_verify_rccl_rocm_consistency() {
+  local version="6.4.2"
+  local expected_root="/opt/rocm-${version}"
+  local hip_compiler
+  local rccl_library
+
+  [[ -n "${ROCM_PATH:-}" ]] ||
+    ghalo_die "Borg RCCL setup requires ROCM_PATH after loading rocm/${version}"
+  if [[ "${ROCM_PATH}" != "${expected_root}" ]] &&
+     ! ghalo_borg_path_matches_rocm_version "${ROCM_PATH}" "${version}"; then
+    ghalo_die "Borg RCCL setup loaded rocm/${version}, but ROCM_PATH='${ROCM_PATH}' does not match ${expected_root}"
+  fi
+
+  export RCCL_ROOT="${ROCM_PATH}"
+  [[ -n "${OLCF_OFI_NCCL_ROOT:-}" ]] ||
+    ghalo_die "Borg RCCL setup requires OLCF_OFI_NCCL_ROOT from rccl-net-plugin/1.0"
+
+  hip_compiler="$(command -v hipcc 2>/dev/null || true)"
+  [[ -n "${hip_compiler}" ]] ||
+    ghalo_die "Borg RCCL setup requires hipcc from rocm/${version}"
+  ghalo_borg_path_matches_rocm_version "${hip_compiler}" "${version}" ||
+    ghalo_die "Borg RCCL mixed ROCm configuration: hipcc='${hip_compiler}' does not match rocm/${version}"
+
+  [[ "${RCCL_ROOT}" == "${ROCM_PATH}" ]] ||
+    ghalo_die "Borg RCCL mixed ROCm configuration: RCCL_ROOT='${RCCL_ROOT}' differs from ROCM_PATH='${ROCM_PATH}'"
+  ghalo_borg_path_matches_rocm_version "${RCCL_ROOT}" "${version}" ||
+    ghalo_die "Borg RCCL mixed ROCm configuration: RCCL_ROOT='${RCCL_ROOT}' does not match rocm/${version}"
+
+  ghalo_borg_rccl_header_exists "${RCCL_ROOT}" ||
+    ghalo_die "Borg RCCL setup could not find rccl.h or nccl.h under RCCL_ROOT='${RCCL_ROOT}'"
+  rccl_library="$(ghalo_borg_resolve_rccl_library "${RCCL_ROOT}")" ||
+    ghalo_die "Borg RCCL setup could not find librccl.so under RCCL_ROOT='${RCCL_ROOT}'"
+  ghalo_borg_path_matches_rocm_version "${rccl_library}" "${version}" ||
+    ghalo_die "Borg RCCL mixed ROCm configuration: RCCL library='${rccl_library}' does not match rocm/${version}"
+
+  export GHALO_LOADED_ROCM_MODULE=rocm/${version}
+  export GHALO_RESOLVED_HIP_COMPILER="${hip_compiler}"
+  export GHALO_RESOLVED_RCCL_LIBRARY="${rccl_library}"
+}
+
+ghalo_borg_load_rccl_gpu() {
+  ghalo_borg_require_modules
+  module load craype-accel-amd-gfx90a ||
+    ghalo_die "failed to load craype-accel-amd-gfx90a on Borg"
+  ghalo_borg_unload_rocm
+  module load rocm/6.4.2 ||
+    ghalo_die "failed to load required Borg ROCm module rocm/6.4.2"
+  module load rccl-net-plugin/1.0 ||
+    ghalo_die "failed to load required Borg RCCL network plugin rccl-net-plugin/1.0"
+  ghalo_borg_verify_rccl_rocm_consistency
 }
 
 ghalo_borg_rccl_availability_hint() {
@@ -49,8 +138,10 @@ ghalo_system_build_alias() {
 ghalo_system_setup_build() {
   local backend="$1"
   ghalo_borg_load_common
-  if [[ "${backend}" == "mpi-hip" || "${backend}" == "rccl" ]]; then
+  if [[ "${backend}" == "mpi-hip" ]]; then
     ghalo_borg_load_gpu
+  elif [[ "${backend}" == "rccl" ]]; then
+    ghalo_borg_load_rccl_gpu
   fi
   if [[ "${backend}" == "mpi-hip" ]]; then
     export MPICH_GPU_SUPPORT_ENABLED=1
@@ -67,8 +158,10 @@ ghalo_system_setup_run() {
   ghalo_borg_load_common
   command -v srun >/dev/null 2>&1 ||
     ghalo_die "Borg runs require Slurm launcher 'srun'"
-  if [[ "${backend}" == "mpi-hip" || "${backend}" == "rccl" ]]; then
+  if [[ "${backend}" == "mpi-hip" ]]; then
     ghalo_borg_load_gpu
+  elif [[ "${backend}" == "rccl" ]]; then
+    ghalo_borg_load_rccl_gpu
   fi
   if [[ "${backend}" == "mpi-hip" ]]; then
     export MPICH_GPU_SUPPORT_ENABLED=1
