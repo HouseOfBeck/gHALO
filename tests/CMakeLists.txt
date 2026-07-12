@@ -17,3 +17,25 @@ if(Python3_Interpreter_FOUND)
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_ghalo_analyze.py
   )
 endif()
+
+if(GHALO_ENABLE_RCCL)
+  add_executable(ghalo_rccl_smoke rccl_smoke.cpp)
+  target_link_libraries(
+    ghalo_rccl_smoke
+    PRIVATE
+      ghalo_project_options
+      MPI::MPI_CXX
+  )
+  if(TARGET rccl::rccl)
+    target_link_libraries(ghalo_rccl_smoke PRIVATE rccl::rccl)
+  elseif(TARGET rccl)
+    target_link_libraries(ghalo_rccl_smoke PRIVATE rccl)
+  else()
+    target_link_libraries(ghalo_rccl_smoke PRIVATE ghalo_rccl_external)
+  endif()
+  if(TARGET hip::host)
+    target_link_libraries(ghalo_rccl_smoke PRIVATE hip::host)
+  elseif(TARGET hip::device)
+    target_link_libraries(ghalo_rccl_smoke PRIVATE hip::device)
+  endif()
+endif()
