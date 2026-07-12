@@ -33,7 +33,13 @@ std::unique_ptr<ghalo::Backend> make_backend(const ghalo::CliOptions& options) {
   }
   if (options.backend == "rccl") {
 #ifdef GHALO_HAVE_RCCL
-    return std::make_unique<ghalo::RCCLBackend>();
+    if (!options.rccl_stage_b) {
+      throw std::runtime_error(
+          "RCCL backend currently implements north/south validation only; "
+          "full halo exchange is not implemented");
+    }
+    return std::make_unique<ghalo::RCCLBackend>(
+        options.validate, options.allow_gpu_oversubscription);
 #else
     throw std::runtime_error(
         "backend rccl requested, but gHALO was not built with "
@@ -62,6 +68,14 @@ int main(int argc, char** argv) {
 
     ghalo::BenchmarkConfig config;
     config.target_seconds = options.target_seconds;
+
+    if (options.rccl_stage_b) {
+      if (options.backend != "rccl") {
+        throw std::runtime_error("--rccl-stage-b requires --backend rccl");
+      }
+      backend->run_development_validation(config.halo_lengths);
+      return 0;
+    }
 
     const auto results = ghalo::run_benchmark(*backend, config);
 

@@ -53,13 +53,14 @@ backends and one experimental backend scaffold:
 
 - `mpi`: CPU/host-memory MPI reference backend.
 - `mpi-hip`: AMD HIP device-memory backend using GPU-aware MPI.
-- `rccl`: experimental build-system and backend scaffolding only; halo
-  communication is not implemented yet.
+- `rccl`: experimental Stage B backend with RCCL communicator initialization
+  and north/south correctness validation only. Full halo exchange timing is not
+  implemented yet.
 
 The `mpi-hip` backend has been validated on Frontier with Cray MPICH, AMD GPUs,
 correctness validation, JSON/CSV output, metadata capture, phase timing, and
-post-run analysis tooling. RCCL communication, UCX, heat maps, and automated
-cluster-health diagnostics remain planned work.
+post-run analysis tooling. RCCL east/west communication, UCX, heat maps, and
+automated cluster-health diagnostics remain planned work.
 
 The development model assumes:
 
@@ -166,10 +167,19 @@ cmake -S . -B build -DGHALO_ENABLE_UCX=ON
 Those options are intended for remote Linux HPC environments where the required
 toolchains and libraries are available.
 
-The RCCL path is scaffolding only in v0.3.x. A future build will use:
+The RCCL path is experimental. It currently requires the explicit
+`--rccl-stage-b` flag and validates only north/south halo communication:
 
 ```sh
 GHALO_SYSTEM_NAME=borg scripts/build.sh --backend rccl --clean
+GHALO_SYSTEM_NAME=borg scripts/run.sh \
+  --backend rccl \
+  --nodes 1 \
+  --ranks 8 \
+  --ranks-per-node 8 \
+  --target-seconds 0.1 \
+  --validate \
+  --rccl-stage-b
 ```
 
 Expected paths follow the existing system/backend layout:
@@ -297,6 +307,7 @@ gHALO values:
 - [Version 0 Design](docs/VERSION_0_DESIGN.md)
 - [GPU-Aware MPI Design](docs/GPU_AWARE_MPI_DESIGN.md)
 - [RCCL Backend Design](docs/RCCL_BACKEND_DESIGN.md)
+- [RCCL Smoke And Stage B Validation](docs/RCCL_SMOKE_TEST.md)
 
 ## Contributing
 

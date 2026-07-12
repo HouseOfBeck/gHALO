@@ -9,7 +9,7 @@ void print_usage(std::ostream& out) {
   out << "Usage: ghalo [--backend mpi|mpi-hip|rccl] [--csv PATH] [--json PATH]\n"
       << "             [--target-seconds SECONDS] [--device-map local-rank]\n"
       << "             [--validate|--no-validate] [--allow-gpu-oversubscription]\n"
-      << "             [--phase-timing]\n";
+      << "             [--phase-timing] [--rccl-stage-b]\n";
 }
 
 CliOptions parse_cli_options(int argc, char** argv) {
@@ -38,6 +38,8 @@ CliOptions parse_cli_options(int argc, char** argv) {
       options.allow_gpu_oversubscription = true;
     } else if (arg == "--phase-timing") {
       options.phase_timing = true;
+    } else if (arg == "--rccl-stage-b") {
+      options.rccl_stage_b = true;
     } else {
       throw std::invalid_argument("unknown or incomplete argument: " + arg);
     }

@@ -36,6 +36,10 @@ struct RankMetadata {
 struct BackendMetadata {
   std::string mpi_library_version;
   std::string hip_runtime_version;
+  std::string rccl_version;
+  std::string rocm_version;
+  std::string rccl_stage;
+  std::string rccl_plugin_root;
   std::string memory_location = "host";
   std::string device_map;
   std::string phase_timing_source;
@@ -85,6 +89,10 @@ public:
   virtual void barrier() = 0;
   virtual double now() const = 0;
   virtual double max_time(double local_seconds) = 0;
+  virtual void run_development_validation(const std::vector<std::size_t>&) {
+    throw std::runtime_error(
+        "development validation is not supported by backend " + name());
+  }
 
   virtual bool supports_phase_timing() const { return false; }
   virtual void set_phase_timing_enabled(bool enabled) {

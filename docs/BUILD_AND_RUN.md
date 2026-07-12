@@ -81,8 +81,9 @@ future implementation explicitly shares that path:
 -DGHALO_ENABLE_RCCL=ON
 ```
 
-The RCCL backend is experimental scaffolding only. It is not yet a runnable
-communication backend and does not make performance claims.
+The RCCL backend is experimental. Stage B initializes RCCL and validates only
+north/south halo communication. It does not run a full two-dimensional halo
+benchmark and does not make performance claims.
 
 Machine-specific CMake additions come from
 `scripts/systems/<system-name>.sh`. The portable script does not hard-code
@@ -132,13 +133,14 @@ Supported options:
 
 ```text
 --system <name>
---backend mpi|mpi-hip
+--backend mpi|mpi-hip|rccl
 --nodes <N>
 --ranks <N>
 --ranks-per-node <N>
 --target-seconds <seconds>
 --validate
 --phase-timing
+--rccl-stage-b
 --label <text>
 --extra-srun-args "<args>"
 ```
@@ -180,6 +182,22 @@ system-resolution.txt
 The current gHALO CLI supports `--csv` and `--json`, so the workflow writes
 structured output directly into the result directory. The script launches the
 benchmark without pipelines and returns the benchmark exit status.
+
+For RCCL Stage B correctness validation:
+
+```sh
+GHALO_SYSTEM_NAME=borg scripts/run.sh \
+  --backend rccl \
+  --nodes 1 \
+  --ranks 8 \
+  --ranks-per-node 8 \
+  --target-seconds 0.1 \
+  --validate \
+  --rccl-stage-b
+```
+
+`--backend rccl` without `--rccl-stage-b` fails because full halo exchange is
+not implemented. Stage B does not emit normal production benchmark timings.
 
 To prevent accidental cross-use of binaries, `run.sh` checks build metadata
 when available and ensures the selected binary comes from the expected
@@ -535,5 +553,5 @@ results/*
 
 The exception allows future curated reference results to be tracked under
 `results/reference/` without accidentally tracking routine benchmark output.
-`rccl` is accepted by the workflow for future RCCL builds, but the backend is
-not yet a runnable halo exchange implementation.
+`rccl` is accepted by the workflow for experimental Stage B correctness runs,
+but the backend is not yet a complete halo exchange implementation.

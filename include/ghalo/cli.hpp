@@ -15,6 +15,7 @@ struct CliOptions {
   bool validate = true;
   bool allow_gpu_oversubscription = false;
   bool phase_timing = false;
+  bool rccl_stage_b = false;
 };
 
 void print_usage(std::ostream& out);

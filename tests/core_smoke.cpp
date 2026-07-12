@@ -3,6 +3,10 @@
 #include "ghalo/exchange.hpp"
 #include "ghalo/output.hpp"
 
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
+
 #include <cassert>
 #include <chrono>
 #include <cstddef>
@@ -89,6 +93,15 @@ void check_self_copy_decisions(const ConceptualTopology& topology,
              topology.rank, topology.east, topology.west) == ew_self);
 }
 
+void check_north_south_plan(const ConceptualTopology& topology) {
+  assert(topology.south == topology_for(topology.rows, topology.cols,
+                                        topology.rank)
+                              .south);
+  assert(topology.north == topology_for(topology.rows, topology.cols,
+                                        topology.rank)
+                              .north);
+}
+
 void test_self_copy_topologies() {
   check_self_copy_decisions(topology_for(1, 1, 0), true, true);
 
@@ -97,6 +110,30 @@ void test_self_copy_topologies() {
 
   for (int rank = 0; rank < 4; ++rank) {
     check_self_copy_decisions(topology_for(2, 2, rank), false, false);
+  }
+}
+
+void test_north_south_stage_b_conceptual_plans() {
+  check_north_south_plan(topology_for(1, 1, 0));
+
+  for (int rank = 0; rank < 2; ++rank) {
+    const auto topology = topology_for(1, 2, rank);
+    assert(topology.north == rank);
+    assert(topology.south == rank);
+    check_north_south_plan(topology);
+  }
+
+  for (int rank = 0; rank < 2; ++rank) {
+    const auto topology = topology_for(2, 1, rank);
+    assert(topology.north == 1 - rank);
+    assert(topology.south == 1 - rank);
+    check_north_south_plan(topology);
+  }
+
+  for (int rank = 0; rank < 4; ++rank) {
+    const auto topology = topology_for(2, 2, rank);
+    assert(topology.north == topology.south);
+    check_north_south_plan(topology);
   }
 }
 
@@ -197,6 +234,15 @@ void test_cli_phase_timing_parse() {
   auto* rccl_argv = const_cast<char**>(rccl_argv_storage);
   const auto rccl_options = ghalo::parse_cli_options(3, rccl_argv);
   assert(rccl_options.backend == "rccl");
+  assert(!rccl_options.rccl_stage_b);
+
+  const char* rccl_stage_argv_storage[] = {"ghalo", "--backend", "rccl",
+                                           "--rccl-stage-b"};
+  auto* rccl_stage_argv = const_cast<char**>(rccl_stage_argv_storage);
+  const auto rccl_stage_options =
+      ghalo::parse_cli_options(4, rccl_stage_argv);
+  assert(rccl_stage_options.backend == "rccl");
+  assert(rccl_stage_options.rccl_stage_b);
 
   const char* bad_argv_storage[] = {"ghalo", "--phase-timing", "--csv"};
   auto* bad_argv = const_cast<char**>(bad_argv_storage);
@@ -205,6 +251,19 @@ void test_cli_phase_timing_parse() {
     (void)ghalo::parse_cli_options(3, bad_argv);
   } catch (const std::invalid_argument&) {
     threw = true;
+  }
+  assert(threw);
+}
+
+void test_development_validation_refusal() {
+  MockBackend backend;
+  bool threw = false;
+  try {
+    backend.run_development_validation({2});
+  } catch (const std::runtime_error& error) {
+    threw = true;
+    assert(std::string(error.what()).find("development validation") !=
+           std::string::npos);
   }
   assert(threw);
 }
@@ -274,9 +333,11 @@ void test_output_with_phase_timing() {
 
 int main() {
   test_self_copy_topologies();
+  test_north_south_stage_b_conceptual_plans();
   test_phase_sum_calculation();
   test_unsupported_phase_timing();
   test_cli_phase_timing_parse();
+  test_development_validation_refusal();
   test_output_without_phase_timing_is_unchanged();
   test_output_with_phase_timing();
 

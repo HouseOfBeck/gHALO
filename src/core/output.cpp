@@ -70,6 +70,12 @@ void write_console(std::ostream& out,
   if (!metadata.hip_runtime_version.empty()) {
     out << "HIP runtime: " << metadata.hip_runtime_version << "\n";
   }
+  if (!metadata.rccl_version.empty()) {
+    out << "RCCL: " << metadata.rccl_version << "\n";
+  }
+  if (!metadata.rccl_stage.empty()) {
+    out << "RCCL stage: " << metadata.rccl_stage << "\n";
+  }
   out << "Ranks: " << topo.world_size << " as a " << topo.rows << " x "
       << topo.cols << " periodic Cartesian grid\n\n";
 
@@ -244,6 +250,18 @@ void write_json(const std::string& path,
     out << ",\n";
     out << "        \"hip_runtime_version\": ";
     write_json_string(out, r.metadata.hip_runtime_version);
+    out << ",\n";
+    out << "        \"rccl_version\": ";
+    write_json_string(out, r.metadata.rccl_version);
+    out << ",\n";
+    out << "        \"rocm_version\": ";
+    write_json_string(out, r.metadata.rocm_version);
+    out << ",\n";
+    out << "        \"rccl_stage\": ";
+    write_json_string(out, r.metadata.rccl_stage);
+    out << ",\n";
+    out << "        \"rccl_plugin_root\": ";
+    write_json_string(out, r.metadata.rccl_plugin_root);
     out << ",\n";
     out << "        \"device_map\": ";
     write_json_string(out, r.metadata.device_map);

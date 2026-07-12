@@ -1,8 +1,8 @@
 # RCCL Backend Design
 
-This document defines the architecture for an experimental gHALO RCCL backend.
-It is a design and scaffolding milestone only. The RCCL backend is not yet a
-runnable halo communication backend.
+This document defines the architecture for the experimental gHALO RCCL backend.
+Stage B is implemented as a correctness-only north/south validation path. The
+backend is not yet a full runnable halo benchmark backend.
 
 ## Purpose And Motivation
 
@@ -107,6 +107,16 @@ East/west stage:
 
 The implementation must not silently fall back to `mpi-hip`.
 
+Stage B implements only the north/south stage. It is available through:
+
+```sh
+./ghalo --backend rccl --rccl-stage-b --validate
+```
+
+Without `--rccl-stage-b`, `--backend rccl` fails clearly because full
+two-dimensional halo exchange is not implemented. Stage B does not emit normal
+benchmark timing results.
+
 ## Stream Model
 
 The initial design should use one explicit HIP stream owned by the RCCL backend.
@@ -204,6 +214,9 @@ Stage B: one-dimensional north/south correctness.
 - Initialize communicator and stream.
 - Validate north/south `N` and `2N` exchanges.
 - Verify self-neighbor and duplicate-neighbor behavior.
+- Implemented as validation-only behind `--rccl-stage-b`.
+- Does not implement intermediate transpose, east/west exchange, full
+  benchmark timing, phase timing, performance comparison, or scaling claims.
 
 Stage C: full two-stage halo correctness.
 

@@ -21,6 +21,7 @@ Options:
   --target-seconds SECONDS   gHALO target seconds per halo size. Default: 3.
   --validate                 Pass --validate to gHALO.
   --phase-timing             Pass --phase-timing to gHALO.
+  --rccl-stage-b             Run RCCL north/south Stage B validation only.
   --label TEXT               Optional result directory label.
   --extra-srun-args ARGS     Extra launcher arguments for systems that use srun.
   -h, --help                 Show this help.
@@ -36,6 +37,7 @@ ranks_per_node=""
 target_seconds="3"
 validate=false
 phase_timing=false
+rccl_stage_b=false
 label="run"
 extra_srun_args=""
 
@@ -77,6 +79,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --phase-timing)
       phase_timing=true
+      shift
+      ;;
+    --rccl-stage-b)
+      rccl_stage_b=true
       shift
       ;;
     --label)
@@ -154,6 +160,9 @@ if [[ "${validate}" == true ]]; then
 fi
 if [[ "${phase_timing}" == true ]]; then
   ghalo_args+=(--phase-timing)
+fi
+if [[ "${rccl_stage_b}" == true ]]; then
+  ghalo_args+=(--rccl-stage-b)
 fi
 
 mapfile -t launch_command < <(

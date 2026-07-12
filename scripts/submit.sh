@@ -24,6 +24,7 @@ Options:
   --target-seconds SECONDS      gHALO target seconds per halo size. Default: 3.
   --validate                    Pass --validate to gHALO.
   --phase-timing                Pass --phase-timing to gHALO.
+  --rccl-stage-b                Run RCCL north/south Stage B validation only.
   --label TEXT                  Optional result label.
   --job-name NAME               Slurm job name.
   --constraint CONSTRAINT       Slurm constraint.
@@ -66,6 +67,7 @@ wall_time=""
 target_seconds="3"
 validate=0
 phase_timing=0
+rccl_stage_b=0
 label="run"
 job_name=""
 constraint=""
@@ -133,6 +135,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --phase-timing)
       phase_timing=1
+      shift
+      ;;
+    --rccl-stage-b)
+      rccl_stage_b=1
       shift
       ;;
     --label)
@@ -308,6 +314,7 @@ sbatch_command+=(
   "${target_seconds}"
   "${validate}"
   "${phase_timing}"
+  "${rccl_stage_b}"
   "${label}"
   "${extra_srun_args}"
   "${original_submit_command}"
