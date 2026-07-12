@@ -684,6 +684,17 @@ test_run_loop_uses_results_for_benchmarks() (
     "run_loop retains harness diagnostic helper"
 )
 
+test_generate_analysis_report_wrapper() (
+  local output="${GHALO_TEST_TMPDIR}/ghalo-generate-analysis-report-help.txt"
+  "${ROOT}/scripts/generate_analysis_report.sh" --help >"${output}"
+  assert_contains 'Usage: scripts/generate_analysis_report.sh --input RESULT_DIR --output ANALYSIS_DIR' \
+    "${output}" "analysis report wrapper usage"
+  assert_contains 'results/frontier/rocm-6.4.2/validation' \
+    "${output}" "analysis report wrapper documents baseline input"
+  assert_contains 'analysis/frontier-rocm-6.4.2-validation' \
+    "${output}" "analysis report wrapper documents baseline output"
+)
+
 test_migrate_results_dry_run() (
   local flat="${GHALO_TEST_TMPDIR}/results/frontier/20260712T000000Z_rccl_rccl_conservative"
   local output="${GHALO_TEST_TMPDIR}/ghalo-migrate-results.txt"
@@ -737,4 +748,5 @@ test_submit_rank_layout_failure
 test_batch_job_requires_slurm
 test_batch_job_uses_explicit_repo_root_from_spool_copy
 test_run_loop_uses_results_for_benchmarks
+test_generate_analysis_report_wrapper
 test_migrate_results_dry_run

@@ -1092,6 +1092,59 @@ def run_labels(runs: Sequence[Run], overrides: Sequence[Optional[str]]) -> List[
     return unique
 
 
+def filename_slug(text: str, default: str = "run") -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", text.strip().lower())
+    slug = slug.strip("-_.")
+    return slug or default
+
+
+def run_comparison_slug(run: Run) -> str:
+    parts = [display_backend(run.backend)]
+    if run.rccl_sync_mode:
+        parts.append(run.rccl_sync_mode)
+    if run.nodes is not None:
+        parts.append(f"{run.nodes}node")
+    if run.ranks is not None:
+        parts.append(f"{run.ranks}rank")
+    return filename_slug("-".join(parts))
+
+
+def percent_difference_pair_key(run: Run) -> Tuple[Any, ...]:
+    message_sizes = tuple(
+        (result.halo_words, result.total_exchange_bytes_per_rank)
+        for result in sorted(run.results, key=result_output_sort_key)
+    )
+    return (
+        run.system,
+        run.rocm_version,
+        run.nodes,
+        run.ranks,
+        run.cartesian,
+        message_sizes,
+    )
+
+
+def percent_difference_pairs(runs: Sequence[Run]) -> List[Tuple[Run, Run]]:
+    ordered = sorted_runs_for_output(runs)
+    pairs: List[Tuple[Run, Run]] = []
+    for left_index, left in enumerate(ordered):
+        for right in ordered[left_index + 1:]:
+            if percent_difference_pair_key(left) != percent_difference_pair_key(right):
+                continue
+            if (
+                left.backend == right.backend
+                and left.rccl_sync_mode == right.rccl_sync_mode
+                and left.result_path == right.result_path
+            ):
+                continue
+            try:
+                percent_difference_rows_for_plot([left, right])
+            except AnalysisError:
+                continue
+            pairs.append((left, right))
+    return pairs
+
+
 def compare_rows(a: Run, b: Run, allow_missing: bool = False) -> List[Dict[str, Any]]:
     a_results = results_by_halo(a)
     b_results = results_by_halo(b)
@@ -1772,6 +1825,7 @@ def write_report_directory(args: argparse.Namespace, runs: List[Run]) -> List[st
         raise AnalysisError(f"report output directory is not writable: {output_dir}")
     plots_dir = output_dir / "plots"
     plots_dir.mkdir(exist_ok=True)
+    comparisons_dir = output_dir / "comparisons"
 
     skipped: List[str] = []
     summary = [row for run in runs for row in summary_rows(run, True, True)]
@@ -1780,11 +1834,13 @@ def write_report_directory(args: argparse.Namespace, runs: List[Run]) -> List[st
         json.dumps(summary, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    (output_dir / "summary.md").write_text(rows_to_markdown(summary), encoding="utf-8")
 
     baseline = choose_baseline(args, runs)
     scaling = scaling_rows(runs, baseline)
     (output_dir / "scaling.csv").write_text(rows_to_csv(scaling), encoding="utf-8")
 
+    comparison_pairs = percent_difference_pairs(runs)
     if len(runs) == 2:
         try:
             comparison = compare_rows(runs[0], runs[1], allow_missing=False)
@@ -1797,6 +1853,19 @@ def write_report_directory(args: argparse.Namespace, runs: List[Run]) -> List[st
     else:
         skipped.append("comparison.csv: requires exactly two compatible repeat runs")
 
+    written_comparisons: List[str] = []
+    if comparison_pairs:
+        comparisons_dir.mkdir(exist_ok=True)
+    for index, (left, right) in enumerate(comparison_pairs, start=1):
+        stem = (
+            f"percent-difference-{index:02d}-"
+            f"{run_comparison_slug(left)}-vs-{run_comparison_slug(right)}"
+        )
+        rows = percent_difference_rows_for_plot([left, right])
+        output = comparisons_dir / f"{stem}.csv"
+        output.write_text(rows_to_csv(rows), encoding="utf-8")
+        written_comparisons.append(str(output.relative_to(output_dir)))
+
     plot_requests = [
         ("latency", plots_dir / "latency.png"),
         ("effective-rate", plots_dir / "effective-rate.png"),
@@ -1804,14 +1873,9 @@ def write_report_directory(args: argparse.Namespace, runs: List[Run]) -> List[st
     ]
     if len(runs) == 2:
         plot_requests.append(("percent-difference", plots_dir / "percent-difference.png"))
-    if any(run.phase_timing_enabled for run in runs):
-        plot_requests.append(("phase", plots_dir / "phase.png"))
 
     for kind, output in plot_requests:
         plot_inputs = [str(run.result_path) for run in runs]
-        if kind == "phase":
-            phase_run = next(run for run in runs if run.phase_timing_enabled)
-            plot_inputs = [str(phase_run.result_path)]
         plot_args = argparse.Namespace(
             kind=kind,
             xscale="log2",
@@ -1835,6 +1899,65 @@ def write_report_directory(args: argparse.Namespace, runs: List[Run]) -> List[st
         except AnalysisError as error:
             skipped.append(f"{output.relative_to(output_dir)}: {error}")
 
+    for index, (left, right) in enumerate(comparison_pairs, start=1):
+        stem = (
+            f"percent-difference-{index:02d}-"
+            f"{run_comparison_slug(left)}-vs-{run_comparison_slug(right)}"
+        )
+        output = plots_dir / f"{stem}.png"
+        plot_args = argparse.Namespace(
+            kind="percent-difference",
+            xscale="log2",
+            yscale="linear",
+            x_axis=args.x_axis,
+            style=args.style,
+            format="png",
+            legend_position=args.legend_position,
+            title=None,
+            label=[],
+            labels=None,
+            output=str(output),
+            dpi=args.dpi,
+            baseline=args.baseline,
+            baseline_path=args.baseline_path,
+            baseline_nodes=args.baseline_nodes,
+            inputs=[str(left.result_path), str(right.result_path)],
+        )
+        try:
+            command_plot(plot_args)
+        except AnalysisError as error:
+            skipped.append(f"{output.relative_to(output_dir)}: {error}")
+
+    phase_runs = [run for run in runs if run.phase_timing_enabled]
+    for index, run in enumerate(phase_runs, start=1):
+        output = (
+            plots_dir / "phase.png"
+            if len(phase_runs) == 1
+            else plots_dir / f"phase-{index:02d}-{run_comparison_slug(run)}.png"
+        )
+        plot_args = argparse.Namespace(
+            kind="phase",
+            xscale="log2",
+            yscale="linear",
+            x_axis=args.x_axis,
+            style=args.style,
+            format="png",
+            legend_position=args.legend_position,
+            title=None,
+            label=[],
+            labels=None,
+            output=str(output),
+            dpi=args.dpi,
+            baseline=args.baseline,
+            baseline_path=args.baseline_path,
+            baseline_nodes=args.baseline_nodes,
+            inputs=[str(run.result_path)],
+        )
+        try:
+            command_plot(plot_args)
+        except AnalysisError as error:
+            skipped.append(f"{output.relative_to(output_dir)}: {error}")
+
     provenance = {
         "input_paths": [str(run.input_path) for run in runs],
         "input_checksums": {str(run.input_path): checksum(run.input_path) for run in runs},
@@ -1843,6 +1966,7 @@ def write_report_directory(args: argparse.Namespace, runs: List[Run]) -> List[st
         "generation_time_utc": datetime.now(timezone.utc).isoformat(),
         "python_version": platform.python_version(),
         "matplotlib_version": matplotlib_version(),
+        "percent_difference_comparisons": written_comparisons,
         "skipped_outputs": skipped,
     }
     (output_dir / "provenance.json").write_text(
@@ -1866,11 +1990,14 @@ def write_report_directory(args: argparse.Namespace, runs: List[Run]) -> List[st
             "",
             "- `summary.csv`",
             "- `summary.json`",
+            "- `summary.md`",
             "- `scaling.csv`",
         ]
     )
     if (output_dir / "comparison.csv").exists():
         lines.append("- `comparison.csv`")
+    if written_comparisons:
+        lines.append("- `comparisons/`")
     lines.append("- `plots/` when matplotlib is available")
     lines.extend(["", "## Skipped Outputs", ""])
     lines.extend(f"- {item}" for item in skipped) if skipped else lines.append("- None")

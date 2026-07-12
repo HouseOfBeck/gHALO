@@ -774,6 +774,52 @@ class GhaloAnalyzeTests(unittest.TestCase):
         self.assertEqual(axis.hlines[0][0][0], 0.0)
         self.assertEqual(axis.ylabel, "Observed Difference (%)")
 
+    def test_percent_difference_pairs_group_compatible_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            mpi_hip = analyze.load_run(
+                str(
+                    write_result_dir(
+                        root,
+                        "mpi-hip-one-node",
+                        nodes_metadata=1,
+                        ranks=8,
+                        rocm_version="6.4.2",
+                    )
+                )
+            )
+            rccl_conservative = analyze.load_run(
+                str(
+                    write_result_dir(
+                        root,
+                        "rccl-conservative-one-node",
+                        backend="RCCLBackend",
+                        rccl_sync_mode="conservative",
+                        nodes_metadata=1,
+                        ranks=8,
+                        rocm_version="6.4.2",
+                    )
+                )
+            )
+            rccl_stream = analyze.load_run(
+                str(
+                    write_result_dir(
+                        root,
+                        "rccl-stream-two-node",
+                        backend="RCCLBackend",
+                        rccl_sync_mode="stream-ordered",
+                        nodes_metadata=2,
+                        ranks=16,
+                        rocm_version="6.4.2",
+                    )
+                )
+            )
+
+        pairs = analyze.percent_difference_pairs(
+            [rccl_stream, rccl_conservative, mpi_hip]
+        )
+        self.assertEqual(pairs, [(mpi_hip, rccl_conservative)])
+
     def test_publication_option_parsing_and_output_format(self) -> None:
         args = analyze.build_parser().parse_args(
             [
@@ -837,10 +883,66 @@ class GhaloAnalyzeTests(unittest.TestCase):
             self.assertTrue((output_dir / "report.md").exists())
             self.assertTrue((output_dir / "summary.csv").exists())
             self.assertTrue((output_dir / "summary.json").exists())
+            self.assertTrue((output_dir / "summary.md").exists())
             self.assertTrue((output_dir / "scaling.csv").exists())
             provenance = json.loads((output_dir / "provenance.json").read_text())
             self.assertTrue(provenance["skipped_outputs"])
             self.assertTrue(skipped)
+
+    def test_report_writes_pairwise_percent_difference_exports(self) -> None:
+        real_import = builtins.__import__
+
+        def blocked_import(name, *args, **kwargs):
+            if name == "matplotlib" or name.startswith("matplotlib."):
+                raise ImportError("blocked for test")
+            return real_import(name, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            mpi_hip = write_result_dir(
+                root,
+                "mpi-hip-one-node",
+                nodes_metadata=1,
+                ranks=8,
+                rocm_version="6.4.2",
+                timings={2: 1.0e-5, 4: 2.0e-5},
+            )
+            rccl = write_result_dir(
+                root,
+                "rccl-one-node",
+                backend="RCCLBackend",
+                rccl_sync_mode="conservative",
+                nodes_metadata=1,
+                ranks=8,
+                rocm_version="6.4.2",
+                timings={2: 1.1e-5, 4: 2.2e-5},
+            )
+            output_dir = root / "report"
+            args = Namespace(
+                output_dir=str(output_dir),
+                style="publication",
+                x_axis="auto",
+                legend_position="auto",
+                dpi=None,
+                baseline="smallest-nodes",
+                baseline_path=None,
+                baseline_nodes=None,
+                inputs=[str(mpi_hip), str(rccl)],
+            )
+            runs = [analyze.load_run(str(mpi_hip)), analyze.load_run(str(rccl))]
+            with mock.patch("builtins.__import__", side_effect=blocked_import):
+                skipped = analyze.write_report_directory(args, runs)
+
+            comparison_exports = sorted((output_dir / "comparisons").glob("*.csv"))
+            self.assertEqual(len(comparison_exports), 1)
+            self.assertIn("percent-difference", comparison_exports[0].name)
+            self.assertIn(
+                "observed_percent_difference",
+                comparison_exports[0].read_text(encoding="utf-8"),
+            )
+            provenance = json.loads((output_dir / "provenance.json").read_text())
+            self.assertEqual(len(provenance["percent_difference_comparisons"]), 1)
+            self.assertTrue(any("percent-difference" in item for item in skipped))
 
     def test_percent_difference_requires_exactly_two_inputs(self) -> None:
         run = analyze.load_run(str(DATA / "repeat_a"))

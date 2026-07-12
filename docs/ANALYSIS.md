@@ -366,6 +366,22 @@ The command records exact input paths, input checksums, the analysis command,
 UTC generation time, Python version, Git commit, and matplotlib version when
 available. Source result directories are never modified.
 
+For the Frontier ROCm 6.4.2 validation baseline, use the generic wrapper:
+
+```sh
+scripts/generate_analysis_report.sh \
+  --input results/frontier/rocm-6.4.2/validation \
+  --output analysis/frontier-rocm-6.4.2-validation
+```
+
+This delegates to `tools/ghalo_analyze.py report` and produces a reproducible
+bundle under `analysis/frontier-rocm-6.4.2-validation/` containing summary
+tables, CSV exports, latency and scaling plots, compatible percent-difference
+exports and plots, phase plots when phase timing is present, provenance, and a
+Markdown report. The wrapper is not Frontier-specific; use any result tree or
+single result bundle with `--input` and any destination directory with
+`--output`.
+
 Single-run comparisons and percent-difference plots are observed differences,
 not statistical conclusions. Positive percent differences mean run B was slower
 than run A; negative values mean run B was faster.
