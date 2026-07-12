@@ -171,6 +171,7 @@ Supported options:
 --validate
 --phase-timing
 --rccl-stage-b
+--rccl-sync-mode conservative|stream-ordered
 --label <text>
 --extra-srun-args "<args>"
 ```
@@ -189,6 +190,13 @@ results/<system>/<timestamp>_<backend>_<label>/
 
 The optional label is sanitized for safe filenames. The result directory is
 printed before launching the benchmark.
+
+`results/` is the canonical location for benchmark artifacts intended for
+analysis. Regression harnesses such as `run_loop.sh` may keep combined logs,
+build logs, `ldd` output, shell-test output, and standalone smoke-test output
+under `test-logs/`, but MPI-HIP and RCCL benchmark runs should still be
+launched through `scripts/run.sh` so `ghalo.csv`, `ghalo.json`, and metadata are
+written under `results/`.
 
 Each run records:
 
@@ -345,7 +353,7 @@ Supported submission options include:
 
 ```text
 --system <name>
---backend mpi|mpi-hip
+--backend mpi|mpi-hip|rccl
 --account <account>
 --partition <partition>
 --nodes <N>
@@ -355,6 +363,8 @@ Supported submission options include:
 --target-seconds <seconds>
 --validate
 --phase-timing
+--rccl-stage-b
+--rccl-sync-mode conservative|stream-ordered
 --label <text>
 --job-name <name>
 --constraint <constraint>

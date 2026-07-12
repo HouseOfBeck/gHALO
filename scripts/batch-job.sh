@@ -4,13 +4,13 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/batch-job.sh REPO_ROOT SYSTEM BACKEND ACCOUNT PARTITION NODES RANKS RANKS_PER_NODE TARGET_SECONDS VALIDATE PHASE_TIMING RCCL_STAGE_B LABEL EXTRA_SRUN_ARGS SUBMIT_COMMAND BATCH_STDOUT BATCH_STDERR
+Usage: scripts/batch-job.sh REPO_ROOT SYSTEM BACKEND ACCOUNT PARTITION NODES RANKS RANKS_PER_NODE TARGET_SECONDS VALIDATE PHASE_TIMING RCCL_STAGE_B RCCL_SYNC_MODE LABEL EXTRA_SRUN_ARGS SUBMIT_COMMAND BATCH_STDOUT BATCH_STDERR
 EOF
 }
 
 [[ -n "${SLURM_JOB_ID:-}" ]] ||
   { echo "gHALO batch-job error: SLURM_JOB_ID is not set; this script must run inside a Slurm job" >&2; exit 1; }
-[[ $# -eq 17 ]] || { usage >&2; exit 2; }
+[[ $# -eq 18 ]] || { usage >&2; exit 2; }
 
 repo_root="$1"
 system="$2"
@@ -24,11 +24,12 @@ target_seconds="$9"
 validate="${10}"
 phase_timing="${11}"
 rccl_stage_b="${12}"
-label="${13}"
-extra_srun_args="${14}"
-submit_command="${15}"
-batch_stdout="${16}"
-batch_stderr="${17}"
+rccl_sync_mode="${13}"
+label="${14}"
+extra_srun_args="${15}"
+submit_command="${16}"
+batch_stdout="${17}"
+batch_stderr="${18}"
 
 [[ "${repo_root}" = /* ]] ||
   { echo "gHALO batch-job error: REPO_ROOT must be an absolute path: ${repo_root}" >&2; exit 2; }
@@ -72,6 +73,7 @@ gHALO batch job
   nodes: ${nodes}
   ranks: ${ranks}
   ranks_per_node: ${ranks_per_node}
+  rccl_sync_mode: ${rccl_sync_mode}
   allocated_nodes: ${SLURM_JOB_NODELIST:-}
   git_commit: ${git_commit}
   workdir: ${repo_root}
@@ -95,6 +97,9 @@ if [[ "${phase_timing}" == "1" ]]; then
 fi
 if [[ "${rccl_stage_b}" == "1" ]]; then
   run_args+=(--rccl-stage-b)
+fi
+if [[ -n "${rccl_sync_mode}" ]]; then
+  run_args+=(--rccl-sync-mode "${rccl_sync_mode}")
 fi
 if [[ -n "${extra_srun_args}" ]]; then
   run_args+=(--extra-srun-args "${extra_srun_args}")

@@ -18,6 +18,11 @@ The analyzer accepts:
 - an explicit `ghalo.csv` file;
 - multiple shell-expanded result paths such as `results/frontier/*mpi-hip*`.
 
+Use `results/` as the source of analyzable benchmark artifacts. Harness
+diagnostics under `test-logs/`, such as build logs, `ldd` output, shell-test
+logs, and standalone transport smoke-test output, are not scanned by
+`ghalo_analyze.py`.
+
 When both `ghalo.json` and `ghalo.csv` exist in a directory, `ghalo.json` is
 preferred because it preserves nested topology, rank mapping, metadata, and
 phase-timing structure.

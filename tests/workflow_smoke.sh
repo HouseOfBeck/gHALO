@@ -546,7 +546,7 @@ test_submit_rank_layout_failure() (
 test_batch_job_requires_slurm() (
   local output="${GHALO_TEST_TMPDIR}/ghalo-batch-job-no-slurm.txt"
   if env -u SLURM_JOB_ID "${ROOT}/scripts/batch-job.sh" \
-    "${ROOT}" frontier mpi TEST123 batch 1 4 4 0.1 0 0 0 smoke "" submit out err \
+    "${ROOT}" frontier mpi TEST123 batch 1 4 4 0.1 0 0 0 "" smoke "" submit out err \
     >"${output}" 2>&1; then
     printf 'expected batch-job without SLURM_JOB_ID to fail\n' >&2
     exit 1
@@ -588,6 +588,7 @@ EOF
     0 \
     0 \
     0 \
+    "" \
     spool-test \
     "" \
     submit \
@@ -607,6 +608,28 @@ EOF
     "mock marker did not use spool path"
 )
 
+test_run_loop_uses_results_for_benchmarks() (
+  local run_loop="${ROOT}/run_loop.sh"
+  assert_contains "run_benchmark_result" "${run_loop}" \
+    "run_loop has benchmark result helper"
+  assert_contains "env GHALO_SYSTEM_NAME=frontier scripts/run.sh" \
+    "${run_loop}" "run_loop benchmark path uses scripts/run.sh"
+  assert_contains 'Benchmark results:' "${run_loop}" \
+    "run_loop prints benchmark result summary"
+  assert_contains 'Harness logs:' "${run_loop}" \
+    "run_loop prints harness log summary"
+  assert_contains 'rccl_conservative_validation-1node-8ranks' "${run_loop}" \
+    "run_loop labels conservative RCCL results distinctly"
+  assert_contains 'rccl_stream-ordered_validation-1node-8ranks' "${run_loop}" \
+    "run_loop labels stream-ordered RCCL results distinctly"
+  assert_contains 'rccl_stream-ordered_phase-1node-8ranks' "${run_loop}" \
+    "run_loop phase run uses structured result label"
+  assert_contains 'rccl-smoke-1node-8ranks' "${run_loop}" \
+    "run_loop keeps standalone smoke diagnostics"
+  assert_contains "run_and_check" "${run_loop}" \
+    "run_loop retains harness diagnostic helper"
+)
+
 test_borg_build_alias_resolution
 test_native_default_for_generic_system
 test_missing_aliased_binary_error
@@ -623,3 +646,4 @@ test_submit_dry_run
 test_submit_rank_layout_failure
 test_batch_job_requires_slurm
 test_batch_job_uses_explicit_repo_root_from_spool_copy
+test_run_loop_uses_results_for_benchmarks

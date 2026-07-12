@@ -22,6 +22,7 @@ Options:
   --validate                 Pass --validate to gHALO.
   --phase-timing             Pass --phase-timing to gHALO.
   --rccl-stage-b             Run RCCL north/south Stage B validation only.
+  --rccl-sync-mode MODE      Pass conservative or stream-ordered to RCCL.
   --label TEXT               Optional result directory label.
   --extra-srun-args ARGS     Extra launcher arguments for systems that use srun.
   -h, --help                 Show this help.
@@ -38,6 +39,7 @@ target_seconds="3"
 validate=false
 phase_timing=false
 rccl_stage_b=false
+rccl_sync_mode=""
 label="run"
 extra_srun_args=""
 
@@ -84,6 +86,15 @@ while [[ $# -gt 0 ]]; do
     --rccl-stage-b)
       rccl_stage_b=true
       shift
+      ;;
+    --rccl-sync-mode)
+      [[ $# -ge 2 ]] || ghalo_die "--rccl-sync-mode requires a value"
+      rccl_sync_mode="$2"
+      case "${rccl_sync_mode}" in
+        conservative | stream-ordered) ;;
+        *) ghalo_die "--rccl-sync-mode must be conservative or stream-ordered" ;;
+      esac
+      shift 2
       ;;
     --label)
       [[ $# -ge 2 ]] || ghalo_die "--label requires a value"
@@ -163,6 +174,9 @@ if [[ "${phase_timing}" == true ]]; then
 fi
 if [[ "${rccl_stage_b}" == true ]]; then
   ghalo_args+=(--rccl-stage-b)
+fi
+if [[ -n "${rccl_sync_mode}" ]]; then
+  ghalo_args+=(--rccl-sync-mode "${rccl_sync_mode}")
 fi
 
 mapfile -t launch_command < <(

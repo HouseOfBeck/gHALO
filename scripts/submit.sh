@@ -25,6 +25,7 @@ Options:
   --validate                    Pass --validate to gHALO.
   --phase-timing                Pass --phase-timing to gHALO.
   --rccl-stage-b                Run RCCL north/south Stage B validation only.
+  --rccl-sync-mode MODE         Pass conservative or stream-ordered to RCCL.
   --label TEXT                  Optional result label.
   --job-name NAME               Slurm job name.
   --constraint CONSTRAINT       Slurm constraint.
@@ -68,6 +69,7 @@ target_seconds="3"
 validate=0
 phase_timing=0
 rccl_stage_b=0
+rccl_sync_mode=""
 label="run"
 job_name=""
 constraint=""
@@ -140,6 +142,15 @@ while [[ $# -gt 0 ]]; do
     --rccl-stage-b)
       rccl_stage_b=1
       shift
+      ;;
+    --rccl-sync-mode)
+      [[ $# -ge 2 ]] || ghalo_die "--rccl-sync-mode requires a value"
+      rccl_sync_mode="$2"
+      case "${rccl_sync_mode}" in
+        conservative | stream-ordered) ;;
+        *) ghalo_die "--rccl-sync-mode must be conservative or stream-ordered" ;;
+      esac
+      shift 2
       ;;
     --label)
       [[ $# -ge 2 ]] || ghalo_die "--label requires a value"
@@ -315,6 +326,7 @@ sbatch_command+=(
   "${validate}"
   "${phase_timing}"
   "${rccl_stage_b}"
+  "${rccl_sync_mode}"
   "${label}"
   "${extra_srun_args}"
   "${original_submit_command}"
