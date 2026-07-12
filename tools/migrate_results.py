@@ -44,6 +44,13 @@ def normalize_rocm(value: str) -> str:
     return sanitize(value.removeprefix("rocm-"), "none")
 
 
+def normalize_label(label: str, backend: str) -> str:
+    label = sanitize(label, "run")
+    while label.startswith(f"{backend}_") or label.startswith(f"{backend}-"):
+        label = label.removeprefix(f"{backend}_").removeprefix(f"{backend}-")
+    return label or "run"
+
+
 def parse_key_value_file(path: Path) -> Dict[str, str]:
     values: Dict[str, str] = {}
     if not path.exists():
@@ -123,8 +130,7 @@ def infer_bundle(bundle: Path) -> Tuple[str, str, str, str, str]:
     category = result_metadata.get("result_category") or infer_category(label, first)
     if category not in CATEGORIES:
         category = "repeatability"
-    label = sanitize(label, "run")
-    label = label.removeprefix(f"{backend}_").removeprefix(f"{backend}-") or "run"
+    label = normalize_label(label, backend)
     return system, rocm, category, backend, label
 
 
@@ -143,7 +149,7 @@ def unique_destination(
     candidate = parent / stem
     suffix = 2
     while candidate.exists():
-        candidate = parent / f"{source.name}_{suffix}"
+        candidate = parent / f"{stem}_{suffix}"
         suffix += 1
     return candidate
 

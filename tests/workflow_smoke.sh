@@ -135,6 +135,13 @@ test_result_path_helpers() (
     "${root}/results/frontier/rocm-6.4.2/validation/20260712T000000Z_rccl_conservative_validation_2" \
     "${result_dir}" \
     "result path avoids collisions"
+  result_dir="$(ghalo_unique_result_dir \
+    "${root}" frontier 6.4.2 validation \
+    20260712T000001Z rccl rccl_rccl_stream-ordered)"
+  assert_eq \
+    "${root}/results/frontier/rocm-6.4.2/validation/20260712T000001Z_rccl_stream-ordered" \
+    "${result_dir}" \
+    "result path removes repeated duplicate backend labels"
 )
 
 # This test intentionally modifies the active system inside a subshell while
@@ -544,6 +551,21 @@ test_submit_dry_run() (
   assert_contains "scripts/batch-job.sh ${ROOT}" \
     "${output}" "repo root follows batch-job path"
   assert_contains 'dry\ run\ label' "${output}" "label is shell escaped"
+
+  GHALO_SYSTEM_NAME=frontier "${ROOT}/scripts/submit.sh" \
+    --backend rccl \
+    --account TEST123 \
+    --nodes 1 \
+    --ranks 8 \
+    --ranks-per-node 8 \
+    --time 00:05:00 \
+    --target-seconds 0.1 \
+    --label "rccl_stream-ordered" \
+    --dry-run >"${output}"
+  assert_contains '--job-name ghalo-frontier-rccl-stream-ordered' \
+    "${output}" "submit normalizes duplicated RCCL job-name labels"
+  assert_not_contains '--job-name ghalo-frontier-rccl-rccl_' \
+    "${output}" "submit job name avoids duplicated RCCL prefix"
 )
 
 test_submit_rank_layout_failure() (
@@ -681,6 +703,18 @@ EOF
     "${output}" "migration dry-run chooses versioned path"
   if sed -n 's/^.* -> //p' "${output}" | grep -Fq 'rccl_rccl'; then
     printf 'migration destination should not contain duplicated backend name\n' >&2
+    exit 1
+  fi
+
+  mkdir -p "${GHALO_TEST_TMPDIR}/results/frontier/rocm-6.4.2/validation/20260712T000000Z_rccl_conservative"
+  python3 "${ROOT}/tools/migrate_results.py" --dry-run \
+    --root "${GHALO_TEST_TMPDIR}" "${GHALO_TEST_TMPDIR}/results/frontier" \
+    >"${output}"
+  assert_contains \
+    "results/frontier/rocm-6.4.2/validation/20260712T000000Z_rccl_conservative_2" \
+    "${output}" "migration collision suffix keeps normalized stem"
+  if sed -n 's/^.* -> //p' "${output}" | grep -Fq 'rccl_rccl'; then
+    printf 'migration collision destination should not contain duplicated backend name\n' >&2
     exit 1
   fi
 )

@@ -306,6 +306,7 @@ command -v sbatch >/dev/null 2>&1 || [[ "${dry_run}" -eq 1 ]] ||
 
 if [[ -z "${job_name}" ]]; then
   safe_label="$(ghalo_sanitize_label "${label}")"
+  safe_label="$(ghalo_strip_backend_label_prefixes "${backend}" "${safe_label}")"
   job_name="ghalo-${system}-${backend}-${safe_label}"
 fi
 

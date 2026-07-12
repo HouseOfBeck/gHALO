@@ -52,6 +52,17 @@ ghalo_sanitize_label() {
   printf '%s\n' "${label}"
 }
 
+ghalo_strip_backend_label_prefixes() {
+  local backend="$1"
+  local label="$2"
+  while [[ "${label}" == "${backend}_"* || "${label}" == "${backend}-"* ]]; do
+    label="${label#"${backend}"_}"
+    label="${label#"${backend}"-}"
+  done
+  [[ -n "${label}" ]] || label=run
+  printf '%s\n' "${label}"
+}
+
 ghalo_normalize_rocm_version() {
   local value="${1:-}"
   if [[ -z "${value}" ]]; then
@@ -115,9 +126,7 @@ ghalo_result_bundle_stem() {
   local label="$3"
   local safe_label
   safe_label="$(ghalo_sanitize_label "${label}")"
-  safe_label="${safe_label#"${backend}"_}"
-  safe_label="${safe_label#"${backend}"-}"
-  [[ -n "${safe_label}" ]] || safe_label=run
+  safe_label="$(ghalo_strip_backend_label_prefixes "${backend}" "${safe_label}")"
   printf '%s_%s_%s\n' "${timestamp}" "${backend}" "${safe_label}"
 }
 
