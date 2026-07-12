@@ -224,7 +224,7 @@ prepare_mpi_hip
 
 run_benchmark_result \
   "mpi-hip-1node-8ranks" \
-  "MPI-HIP validation PASSED" \
+  "Backend: MPIHIPBackend" \
   env GHALO_SYSTEM_NAME=frontier scripts/run.sh \
     --backend mpi-hip \
     --nodes 1 \
@@ -236,7 +236,7 @@ run_benchmark_result \
 
 run_benchmark_result \
   "mpi-hip-2nodes-16ranks" \
-  "MPI-HIP validation PASSED" \
+  "Backend: MPIHIPBackend" \
   env GHALO_SYSTEM_NAME=frontier scripts/run.sh \
     --backend mpi-hip \
     --nodes 2 \
@@ -373,7 +373,7 @@ prepare_mpi_hip
 
 run_benchmark_result \
   "mpi-hip-1node-8ranks-phase" \
-  "MPI-HIP validation PASSED" \
+  "Backend: MPIHIPBackend" \
   env GHALO_SYSTEM_NAME=frontier scripts/run.sh \
     --backend mpi-hip \
     --nodes 1 \
