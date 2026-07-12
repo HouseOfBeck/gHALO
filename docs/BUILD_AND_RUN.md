@@ -86,6 +86,24 @@ two-dimensional halo exchange with correctness-first stream synchronization.
 It implements diagnostic RCCL phase timing, but does not yet claim
 synchronization optimization or production performance comparisons.
 
+The default synchronization mode is:
+
+```sh
+--rccl-sync-mode conservative
+```
+
+An experimental stream-ordered mode is available for full RCCL runs:
+
+```sh
+--rccl-sync-mode stream-ordered
+```
+
+Stream-ordered mode enqueues the input copy, north/south RCCL work,
+intermediate device copy, and east/west RCCL work on the same backend HIP
+stream, then performs one final stream synchronization. It must be validated
+for each topology before timings are interpreted. Stage B remains a
+conservative north/south-only debugging path.
+
 Machine-specific CMake additions come from
 `scripts/systems/<system-name>.sh`. The portable script does not hard-code
 compiler, MPI, ROCm, or scheduler paths.
@@ -189,6 +207,19 @@ For RCCL full correctness validation:
 ```sh
 GHALO_SYSTEM_NAME=borg scripts/run.sh \
   --backend rccl \
+  --nodes 1 \
+  --ranks 8 \
+  --ranks-per-node 8 \
+  --target-seconds 0.1 \
+  --validate
+```
+
+To validate the stream-ordered experiment on the same placement:
+
+```sh
+GHALO_SYSTEM_NAME=borg scripts/run.sh \
+  --backend rccl \
+  --rccl-sync-mode stream-ordered \
   --nodes 1 \
   --ranks 8 \
   --ranks-per-node 8 \
@@ -515,6 +546,46 @@ GHALO_SYSTEM_NAME=borg scripts/run.sh \
   --phase-timing \
   --label phase-baseline
 ```
+
+Concise RCCL mode comparison sequence for one node:
+
+```sh
+GHALO_SYSTEM_NAME=borg scripts/run.sh \
+  --backend rccl \
+  --rccl-sync-mode conservative \
+  --nodes 1 \
+  --ranks 8 \
+  --ranks-per-node 8 \
+  --target-seconds 3 \
+  --validate \
+  --phase-timing \
+  --label rccl-conservative
+
+GHALO_SYSTEM_NAME=borg scripts/run.sh \
+  --backend rccl \
+  --rccl-sync-mode stream-ordered \
+  --nodes 1 \
+  --ranks 8 \
+  --ranks-per-node 8 \
+  --target-seconds 3 \
+  --validate \
+  --phase-timing \
+  --label rccl-stream-ordered
+
+GHALO_SYSTEM_NAME=borg scripts/run.sh \
+  --backend mpi-hip \
+  --nodes 1 \
+  --ranks 8 \
+  --ranks-per-node 8 \
+  --target-seconds 3 \
+  --validate \
+  --phase-timing \
+  --label mpi-hip-reference
+```
+
+Treat these as bring-up comparisons only. RCCL and MPI-HIP may use different
+ROCm module versions, placement effects can dominate small messages, and
+multiple repeats are required before drawing performance conclusions.
 
 The Borg profile:
 

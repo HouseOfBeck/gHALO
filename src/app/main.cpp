@@ -35,7 +35,7 @@ std::unique_ptr<ghalo::Backend> make_backend(const ghalo::CliOptions& options) {
 #ifdef GHALO_HAVE_RCCL
     return std::make_unique<ghalo::RCCLBackend>(
         options.validate, options.allow_gpu_oversubscription,
-        options.rccl_stage_b);
+        options.rccl_stage_b, options.rccl_sync_mode);
 #else
     throw std::runtime_error(
         "backend rccl requested, but gHALO was not built with "

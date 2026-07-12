@@ -10,6 +10,7 @@ struct CliOptions {
   std::string csv_path = "ghalo.csv";
   std::string json_path = "ghalo.json";
   std::string device_map = "local-rank";
+  std::string rccl_sync_mode = "conservative";
   double target_seconds = 3.0;
   bool show_help = false;
   bool validate = true;

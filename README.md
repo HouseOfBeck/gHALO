@@ -170,8 +170,8 @@ Those options are intended for remote Linux HPC environments where the required
 toolchains and libraries are available.
 
 The RCCL path is experimental. The default `--backend rccl` path runs the full
-two-dimensional exchange; `--rccl-stage-b` remains available for north/south
-debugging:
+two-dimensional exchange in conservative synchronization mode;
+`--rccl-stage-b` remains available for north/south debugging:
 
 ```sh
 GHALO_SYSTEM_NAME=borg scripts/build.sh --backend rccl --clean
@@ -183,6 +183,22 @@ GHALO_SYSTEM_NAME=borg scripts/run.sh \
   --target-seconds 0.1 \
   --validate
 ```
+
+The full RCCL backend also supports an opt-in stream-ordered synchronization
+experiment:
+
+```sh
+GHALO_SYSTEM_NAME=borg scripts/run.sh \
+  --backend rccl \
+  --rccl-sync-mode stream-ordered \
+  --nodes 1 \
+  --ranks 8 \
+  --ranks-per-node 8 \
+  --target-seconds 0.1 \
+  --validate
+```
+
+Conservative mode remains the default and correctness reference.
 
 Expected paths follow the existing system/backend layout:
 
@@ -256,7 +272,8 @@ timing:
 
 ```sh
 ghalo --backend mpi-hip --phase-timing
-ghalo --backend rccl --phase-timing
+ghalo --backend rccl --rccl-sync-mode conservative --phase-timing
+ghalo --backend rccl --rccl-sync-mode stream-ordered --phase-timing
 ```
 
 See [Phase Timing](docs/PHASE_TIMING.md).

@@ -9,7 +9,8 @@ void print_usage(std::ostream& out) {
   out << "Usage: ghalo [--backend mpi|mpi-hip|rccl] [--csv PATH] [--json PATH]\n"
       << "             [--target-seconds SECONDS] [--device-map local-rank]\n"
       << "             [--validate|--no-validate] [--allow-gpu-oversubscription]\n"
-      << "             [--phase-timing] [--rccl-stage-b]\n";
+      << "             [--phase-timing] [--rccl-stage-b]\n"
+      << "             [--rccl-sync-mode conservative|stream-ordered]\n";
 }
 
 CliOptions parse_cli_options(int argc, char** argv) {
@@ -30,6 +31,14 @@ CliOptions parse_cli_options(int argc, char** argv) {
       options.target_seconds = std::stod(argv[++i]);
     } else if (arg == "--device-map" && i + 1 < argc) {
       options.device_map = argv[++i];
+    } else if (arg == "--rccl-sync-mode" && i + 1 < argc) {
+      options.rccl_sync_mode = argv[++i];
+      if (options.rccl_sync_mode != "conservative" &&
+          options.rccl_sync_mode != "stream-ordered") {
+        throw std::invalid_argument(
+            "invalid --rccl-sync-mode value: " + options.rccl_sync_mode +
+            " (expected conservative or stream-ordered)");
+      }
     } else if (arg == "--validate") {
       options.validate = true;
     } else if (arg == "--no-validate") {

@@ -39,11 +39,13 @@ struct BackendMetadata {
   std::string rccl_version;
   std::string rocm_version;
   std::string rccl_stage;
+  std::string rccl_sync_mode;
   std::string rccl_plugin_root;
   std::string memory_location = "host";
   std::string device_map;
   std::string phase_timing_source;
   std::string phase_timing_aggregation;
+  std::string phase_timing_active_phases;
   std::string synchronization_model;
   std::string transport_provider;
   bool gpu_aware_mpi_requested = false;
@@ -65,6 +67,10 @@ struct PhaseTimingResult {
   double east_west_mpi_seconds{};
   double east_west_communication_seconds{};
   double east_west_sync_seconds{};
+  double north_south_communication_enqueue_seconds{};
+  double transpose_copy_enqueue_seconds{};
+  double east_west_communication_enqueue_seconds{};
+  double final_stream_sync_seconds{};
   double phase_sum_seconds{};
   double unattributed_seconds{};
   double total_exchange_seconds{};
@@ -77,6 +83,17 @@ inline double phase_timing_sum(const PhaseTimingResult& phase) {
       phase.transpose_copy_seconds != 0.0 ||
       phase.transpose_sync_seconds != 0.0 ||
       phase.east_west_communication_seconds != 0.0;
+  const bool has_stream_ordered_fields =
+      phase.north_south_communication_enqueue_seconds != 0.0 ||
+      phase.transpose_copy_enqueue_seconds != 0.0 ||
+      phase.east_west_communication_enqueue_seconds != 0.0 ||
+      phase.final_stream_sync_seconds != 0.0;
+  if (has_stream_ordered_fields) {
+    return phase.north_south_communication_enqueue_seconds +
+           phase.transpose_copy_enqueue_seconds +
+           phase.east_west_communication_enqueue_seconds +
+           phase.final_stream_sync_seconds;
+  }
   if (has_generic_fields) {
     return phase.input_device_copy_seconds +
            phase.north_south_communication_seconds +

@@ -294,6 +294,15 @@ void test_cli_phase_timing_parse() {
   const auto rccl_options = ghalo::parse_cli_options(3, rccl_argv);
   assert(rccl_options.backend == "rccl");
   assert(!rccl_options.rccl_stage_b);
+  assert(rccl_options.rccl_sync_mode == "conservative");
+
+  const char* rccl_stream_argv_storage[] = {
+      "ghalo", "--backend", "rccl", "--rccl-sync-mode", "stream-ordered"};
+  auto* rccl_stream_argv = const_cast<char**>(rccl_stream_argv_storage);
+  const auto rccl_stream_options =
+      ghalo::parse_cli_options(5, rccl_stream_argv);
+  assert(rccl_stream_options.backend == "rccl");
+  assert(rccl_stream_options.rccl_sync_mode == "stream-ordered");
 
   const char* rccl_stage_argv_storage[] = {"ghalo", "--backend", "rccl",
                                            "--rccl-stage-b"};
@@ -302,6 +311,17 @@ void test_cli_phase_timing_parse() {
       ghalo::parse_cli_options(4, rccl_stage_argv);
   assert(rccl_stage_options.backend == "rccl");
   assert(rccl_stage_options.rccl_stage_b);
+
+  const char* bad_sync_argv_storage[] = {
+      "ghalo", "--backend", "rccl", "--rccl-sync-mode", "fast"};
+  auto* bad_sync_argv = const_cast<char**>(bad_sync_argv_storage);
+  bool bad_sync_threw = false;
+  try {
+    (void)ghalo::parse_cli_options(5, bad_sync_argv);
+  } catch (const std::invalid_argument&) {
+    bad_sync_threw = true;
+  }
+  assert(bad_sync_threw);
 
   const char* bad_argv_storage[] = {"ghalo", "--phase-timing", "--csv"};
   auto* bad_argv = const_cast<char**>(bad_argv_storage);
@@ -394,6 +414,7 @@ void test_output_with_rccl_phase_timing() {
   result.backend = "RCCLBackend";
   result.algorithm = "rccl";
   result.metadata.rccl_version = "20400";
+  result.metadata.rccl_sync_mode = "conservative";
   result.metadata.synchronization_model = "three_stream_synchronizations";
   ghalo::PhaseTimingResult phase;
   phase.north_south_communication_seconds = 0.002;
@@ -441,6 +462,53 @@ void test_output_with_rccl_phase_timing() {
                    "\"three_stream_synchronizations\"") != std::string::npos);
 }
 
+void test_output_with_rccl_stream_ordered_phase_timing() {
+  auto result = sample_result();
+  result.backend = "RCCLBackend";
+  result.algorithm = "rccl";
+  result.metadata.rccl_version = "20400";
+  result.metadata.rccl_sync_mode = "stream-ordered";
+  result.metadata.synchronization_model = "one_final_stream_sync";
+  result.metadata.phase_timing_active_phases =
+      "north_south_communication_enqueue,transpose_copy_enqueue,"
+      "east_west_communication_enqueue,final_stream_sync";
+  ghalo::PhaseTimingResult phase;
+  phase.north_south_communication_enqueue_seconds = 0.0002;
+  phase.transpose_copy_enqueue_seconds = 0.0003;
+  phase.east_west_communication_enqueue_seconds = 0.0004;
+  phase.final_stream_sync_seconds = 0.009;
+  phase.phase_sum_seconds = ghalo::phase_timing_sum(phase);
+  phase.total_exchange_seconds = 0.01;
+  phase.total_minus_sum_of_phase_maxima_seconds =
+      phase.total_exchange_seconds - phase.phase_sum_seconds;
+  phase.unattributed_seconds = phase.total_minus_sum_of_phase_maxima_seconds;
+  result.phase_timing = phase;
+  result.metadata.phase_timing_enabled = true;
+  result.metadata.phase_timing_source = "MPI_Wtime";
+  result.metadata.phase_timing_aggregation =
+      "maximum local average across ranks";
+
+  const std::vector<ghalo::BenchmarkResult> results{result};
+  ScopedTempDirectory temp;
+
+  std::ostringstream console;
+  ghalo::write_console(console, results);
+  assert(console.str().find("RCCL sync mode: stream-ordered") !=
+         std::string::npos);
+  assert(console.str().find("ns_enqueue_us") != std::string::npos);
+  assert(console.str().find("ns_sync_us") == std::string::npos);
+
+  const auto json_path = temp.file("ghalo_core_smoke_rccl_stream_phase.json");
+  ghalo::write_json(json_path.string(), results);
+  const std::string json = read_file(json_path);
+  assert(json.find("\"rccl_sync_mode\": \"stream-ordered\"") !=
+         std::string::npos);
+  assert(json.find("\"final_stream_sync_seconds\"") != std::string::npos);
+  assert(json.find("\"active_phases\": "
+                   "\"north_south_communication_enqueue") !=
+         std::string::npos);
+}
+
 } // namespace
 
 int main() {
@@ -456,6 +524,7 @@ int main() {
   test_output_without_phase_timing_is_unchanged();
   test_output_with_phase_timing();
   test_output_with_rccl_phase_timing();
+  test_output_with_rccl_stream_ordered_phase_timing();
 
   MockBackend backend;
   ghalo::BenchmarkConfig config;

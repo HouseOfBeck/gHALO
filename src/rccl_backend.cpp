@@ -145,6 +145,58 @@ std::string values_string(const std::vector<float>& values) {
   return out.str();
 }
 
+RCCLBackend::SyncMode parse_sync_mode(const std::string& value,
+                                      bool stage_b_only) {
+  if (value == "conservative") {
+    return RCCLBackend::SyncMode::Conservative;
+  }
+  if (value == "stream-ordered") {
+    if (stage_b_only) {
+      throw std::runtime_error(
+          "--rccl-sync-mode stream-ordered requires the full RCCL backend; "
+          "Stage B supports conservative north/south validation only");
+    }
+    return RCCLBackend::SyncMode::StreamOrdered;
+  }
+  throw std::invalid_argument("invalid RCCL sync mode: " + value);
+}
+
+std::string sync_mode_name(RCCLBackend::SyncMode mode) {
+  switch (mode) {
+  case RCCLBackend::SyncMode::Conservative:
+    return "conservative";
+  case RCCLBackend::SyncMode::StreamOrdered:
+    return "stream-ordered";
+  }
+  return "unknown";
+}
+
+std::string synchronization_model(RCCLBackend::SyncMode mode,
+                                  bool stage_b_only) {
+  if (stage_b_only) {
+    return "single_stream_synchronization";
+  }
+  switch (mode) {
+  case RCCLBackend::SyncMode::Conservative:
+    return "three_stream_synchronizations";
+  case RCCLBackend::SyncMode::StreamOrdered:
+    return "one_final_stream_sync";
+  }
+  return {};
+}
+
+std::string active_phase_names(RCCLBackend::SyncMode mode) {
+  switch (mode) {
+  case RCCLBackend::SyncMode::Conservative:
+    return "north_south_communication,north_south_sync,transpose_copy,"
+           "transpose_sync,east_west_communication,east_west_sync";
+  case RCCLBackend::SyncMode::StreamOrdered:
+    return "north_south_communication_enqueue,transpose_copy_enqueue,"
+           "east_west_communication_enqueue,final_stream_sync";
+  }
+  return {};
+}
+
 } // namespace
 
 class RCCLBackend::DeviceBuffer final {
@@ -187,9 +239,10 @@ private:
 };
 
 RCCLBackend::RCCLBackend(bool validate, bool allow_oversubscription,
-                         bool stage_b_only)
+                         bool stage_b_only, const std::string& sync_mode)
     : validate_(validate), allow_oversubscription_(allow_oversubscription),
-      stage_b_only_(stage_b_only) {
+      stage_b_only_(stage_b_only),
+      sync_mode_(parse_sync_mode(sync_mode, stage_b_only)) {
   initialize_topology();
   initialize_local_rank();
   select_device();
@@ -261,6 +314,14 @@ void RCCLBackend::exchange() {
   if (stage_b_only_) {
     fail_not_implemented();
   }
+  if (sync_mode_ == SyncMode::StreamOrdered) {
+    exchange_stream_ordered();
+    return;
+  }
+  exchange_conservative();
+}
+
+void RCCLBackend::exchange_conservative() {
   copy_hoew_to_hins();
   if (!phase_timing_collecting_) {
     exchange_north_south();
@@ -295,6 +356,38 @@ void RCCLBackend::exchange() {
   start = now();
   synchronize_stream("hipStreamSynchronize after east/west RCCL");
   phase_timing_.east_west_sync_seconds += now() - start;
+}
+
+void RCCLBackend::exchange_stream_ordered() {
+  if (phase_timing_collecting_) {
+    exchange_stream_ordered_with_phase_timing();
+    return;
+  }
+  enqueue_hoew_to_hins_copy();
+  enqueue_north_south();
+  enqueue_hons_to_hiew_copy();
+  enqueue_east_west();
+  synchronize_stream("hipStreamSynchronize after stream-ordered RCCL exchange");
+}
+
+void RCCLBackend::exchange_stream_ordered_with_phase_timing() {
+  enqueue_hoew_to_hins_copy();
+
+  double start = now();
+  enqueue_north_south();
+  phase_timing_.north_south_communication_enqueue_seconds += now() - start;
+
+  start = now();
+  enqueue_hons_to_hiew_copy();
+  phase_timing_.transpose_copy_enqueue_seconds += now() - start;
+
+  start = now();
+  enqueue_east_west();
+  phase_timing_.east_west_communication_enqueue_seconds += now() - start;
+
+  start = now();
+  synchronize_stream("hipStreamSynchronize after stream-ordered RCCL exchange");
+  phase_timing_.final_stream_sync_seconds += now() - start;
 }
 
 void RCCLBackend::barrier() {
@@ -353,9 +446,11 @@ void RCCLBackend::set_phase_timing_enabled(bool enabled) {
   if (enabled) {
     metadata_.phase_timing_source = "MPI_Wtime";
     metadata_.phase_timing_aggregation = "maximum local average across ranks";
+    metadata_.phase_timing_active_phases = active_phase_names(sync_mode_);
   } else {
     metadata_.phase_timing_source.clear();
     metadata_.phase_timing_aggregation.clear();
+    metadata_.phase_timing_active_phases.clear();
     phase_timing_collecting_ = false;
   }
 }
@@ -377,6 +472,24 @@ PhaseTimingResult RCCLBackend::phase_timing_result(int iterations,
   phase_timing_collecting_ = false;
 
   PhaseTimingResult result;
+  if (sync_mode_ == SyncMode::StreamOrdered) {
+    result.north_south_communication_enqueue_seconds = reduced_phase_average(
+        phase_timing_.north_south_communication_enqueue_seconds, iterations);
+    result.transpose_copy_enqueue_seconds = reduced_phase_average(
+        phase_timing_.transpose_copy_enqueue_seconds, iterations);
+    result.east_west_communication_enqueue_seconds = reduced_phase_average(
+        phase_timing_.east_west_communication_enqueue_seconds, iterations);
+    result.final_stream_sync_seconds =
+        reduced_phase_average(phase_timing_.final_stream_sync_seconds,
+                              iterations);
+    result.phase_sum_seconds = phase_timing_sum(result);
+    result.total_exchange_seconds = total_seconds;
+    result.total_minus_sum_of_phase_maxima_seconds =
+        total_seconds - result.phase_sum_seconds;
+    result.unattributed_seconds =
+        result.total_minus_sum_of_phase_maxima_seconds;
+    return result;
+  }
   result.north_south_communication_seconds = reduced_phase_average(
       phase_timing_.north_south_communication_seconds, iterations);
   result.north_south_sync_seconds =
@@ -517,9 +630,9 @@ void RCCLBackend::initialize_metadata() {
   metadata_.validation_enabled = validate_;
   metadata_.validation_passed = !validate_;
   metadata_.rccl_stage = stage_b_only_ ? "north-south-only" : "full";
+  metadata_.rccl_sync_mode = sync_mode_name(sync_mode_);
   metadata_.synchronization_model =
-      stage_b_only_ ? "single_stream_synchronization"
-                    : "three_stream_synchronizations";
+      synchronization_model(sync_mode_, stage_b_only_);
   metadata_.hip_runtime_version =
       hip_runtime_version(rank(), local_rank_, selected_device_);
   metadata_.rccl_version = rccl_version(rank(), local_rank_, selected_device_);
@@ -640,11 +753,14 @@ void RCCLBackend::fill_rank() {
 }
 
 void RCCLBackend::copy_hoew_to_hins() {
+  enqueue_hoew_to_hins_copy();
+  synchronize_stream("hipStreamSynchronize after hoew -> hins");
+}
+
+void RCCLBackend::enqueue_hoew_to_hins_copy() {
   hip_check(hipMemcpyAsync(hins_->data(), hoew_->data(), hoew_->bytes(),
                            hipMemcpyDeviceToDevice, stream_),
             "hipMemcpyAsync hoew -> hins");
-  hip_check(hipStreamSynchronize(stream_),
-            "hipStreamSynchronize after hoew -> hins");
 }
 
 void RCCLBackend::enqueue_north_south() {
@@ -807,10 +923,7 @@ void RCCLBackend::validate_north_south() {
 
 void RCCLBackend::validate_full_exchange() {
   fill_pattern();
-  copy_hoew_to_hins();
-  exchange_north_south();
-  copy_hons_to_hiew();
-  exchange_east_west();
+  exchange();
 
   const std::size_t count = halo_buffer_words(halo_words_);
   std::vector<float> hons(count);
@@ -844,6 +957,7 @@ void RCCLBackend::validate_full_exchange() {
                                      hons.begin() + sample_count);
       std::ostringstream message;
       message << "RCCL full halo validation failed on rank " << rank()
+              << " mode " << sync_mode_name(sync_mode_)
               << " local_rank " << local_rank_ << " direction " << direction
               << " index " << index << ": expected " << expected
               << ", actual " << actual << ", neighbor " << neighbor
@@ -908,7 +1022,8 @@ void RCCLBackend::print_validation_summary() const {
   }
   std::cout << "RCCL full halo validation PASSED for "
             << validated_halo_count_ << " halo size"
-            << (validated_halo_count_ == 1 ? "" : "s") << "\n";
+            << (validated_halo_count_ == 1 ? "" : "s")
+            << " in " << sync_mode_name(sync_mode_) << " mode\n";
   validation_summary_printed_ = true;
 }
 
@@ -918,6 +1033,7 @@ void RCCLBackend::print_startup() const {
   }
   std::cout << "backend: " << name() << "\n"
             << "rccl_stage: " << metadata_.rccl_stage << "\n"
+            << "RCCL sync mode: " << metadata_.rccl_sync_mode << "\n"
             << "rocm_version: " << metadata_.rocm_version << "\n"
             << "hip_runtime_version: " << metadata_.hip_runtime_version << "\n"
             << "rccl_version: " << metadata_.rccl_version << "\n"

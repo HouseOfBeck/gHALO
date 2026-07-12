@@ -75,6 +75,8 @@ measures synchronization calls that already exist for correctness.
 
 For each timed exchange iteration, the `rccl` backend records:
 
+In `--rccl-sync-mode conservative`:
+
 - `north_south_communication`: grouped RCCL sends and receives for the
   north-south `N` and `2N` segments.
 - `north_south_sync`: the stream synchronization after north-south RCCL.
@@ -84,10 +86,21 @@ For each timed exchange iteration, the `rccl` backend records:
   `N` and `2N` segments.
 - `east_west_sync`: the stream synchronization after east-west RCCL.
 
-The initial RCCL implementation intentionally keeps correctness-first
-`hipStreamSynchronize` calls at the three visibility boundaries. These
-synchronizations may later be replaced by a lower-overhead stream-aware
-mechanism, but they must not be removed merely to improve benchmark numbers.
+In `--rccl-sync-mode stream-ordered`:
+
+- `north_south_communication_enqueue`: host time to enqueue grouped
+  north-south RCCL work.
+- `transpose_copy_enqueue`: host time to enqueue the `hons` to `hiew`
+  device-to-device copy on the same stream.
+- `east_west_communication_enqueue`: host time to enqueue grouped east-west
+  RCCL work.
+- `final_stream_sync`: the one stream synchronization that completes the queued
+  input copy, north/south RCCL work, intermediate copy, and east/west RCCL work.
+
+Stream-ordered enqueue phases measure host submission overhead, not
+communication completion. Completion is represented by `final_stream_sync`.
+Conservative mode remains the default correctness reference; stream-ordered
+mode is experimental and must be revalidated on each target system and topology.
 
 ## Aggregation
 
@@ -121,7 +134,8 @@ shape.
 When phase timing is enabled:
 
 - console output prints the normal result table first, then a second phase
-  table in microseconds;
+  table in microseconds using columns appropriate to the selected RCCL
+  synchronization mode;
 - CSV output adds phase columns such as
   `phase_north_south_communication_seconds` and
   `phase_total_minus_sum_of_phase_maxima_seconds`;
@@ -132,6 +146,10 @@ The older MPI-HIP-specific field names, such as `north_south_mpi_seconds`, are
 retained for compatibility. RCCL communication is serialized with neutral
 `*_communication_seconds` names so analysis and reporting do not mislabel RCCL
 transfers as MPI.
+
+RCCL output records `rccl_sync_mode`, `synchronization_model`, and active phase
+names so conservative and stream-ordered runs can be compared without silently
+mixing unlike synchronization models.
 
 ## Performance Caution
 

@@ -70,6 +70,13 @@ bool has_generic_phase_fields(const PhaseTimingResult& phase) {
          phase.total_exchange_seconds != 0.0;
 }
 
+bool has_stream_ordered_phase_fields(const PhaseTimingResult& phase) {
+  return phase.north_south_communication_enqueue_seconds != 0.0 ||
+         phase.transpose_copy_enqueue_seconds != 0.0 ||
+         phase.east_west_communication_enqueue_seconds != 0.0 ||
+         phase.final_stream_sync_seconds != 0.0;
+}
+
 double phase_north_south_communication(const PhaseTimingResult& phase) {
   return has_generic_phase_fields(phase)
              ? phase.north_south_communication_seconds
@@ -99,7 +106,8 @@ double phase_total_exchange(const PhaseTimingResult& phase,
 }
 
 double phase_total_minus_sum(const PhaseTimingResult& phase) {
-  return has_generic_phase_fields(phase)
+  return has_generic_phase_fields(phase) ||
+                 has_stream_ordered_phase_fields(phase)
              ? phase.total_minus_sum_of_phase_maxima_seconds
              : phase.unattributed_seconds;
 }
@@ -136,6 +144,9 @@ void write_console(std::ostream& out,
   }
   if (!metadata.rccl_stage.empty()) {
     out << "RCCL stage: " << metadata.rccl_stage << "\n";
+  }
+  if (!metadata.rccl_sync_mode.empty()) {
+    out << "RCCL sync mode: " << metadata.rccl_sync_mode << "\n";
   }
   out << "Ranks: " << topo.world_size << " as a " << topo.rows << " x "
       << topo.cols << " periodic Cartesian grid\n\n";
@@ -176,19 +187,32 @@ void write_console(std::ostream& out,
 
   if (has_phase_timing(results)) {
     const bool include_input_copy = has_input_device_copy_phase(results);
+    const bool stream_ordered_phases =
+        results.front().metadata.rccl_sync_mode == "stream-ordered" ||
+        (results.front().phase_timing.has_value() &&
+         has_stream_ordered_phase_fields(*results.front().phase_timing));
     out << "\n" << phase_timing_label(results.front())
         << " (microseconds, max average per rank):\n";
     out << std::setw(8) << "N";
-    if (include_input_copy) {
-      out << std::setw(16) << "input_copy_us";
+    if (stream_ordered_phases) {
+      out << std::setw(18) << "ns_enqueue_us" << std::setw(22)
+          << "transpose_enqueue_us" << std::setw(18) << "ew_enqueue_us"
+          << std::setw(18) << "final_sync_us" << std::setw(16)
+          << "phase_sum_us" << std::setw(14) << "total_us" << std::setw(22)
+          << "total_minus_sum_us" << "\n";
+      out << std::string(136, '-') << "\n";
+    } else {
+      if (include_input_copy) {
+        out << std::setw(16) << "input_copy_us";
+      }
+      out << std::setw(14) << "ns_comm_us" << std::setw(14) << "ns_sync_us"
+          << std::setw(20) << "transpose_copy_us" << std::setw(18)
+          << "transpose_sync_us" << std::setw(14) << "ew_comm_us"
+          << std::setw(14) << "ew_sync_us" << std::setw(16)
+          << "phase_sum_us" << std::setw(14) << "total_us" << std::setw(22)
+          << "total_minus_sum_us" << "\n";
+      out << std::string(include_input_copy ? 156 : 140, '-') << "\n";
     }
-    out << std::setw(14) << "ns_comm_us" << std::setw(14) << "ns_sync_us"
-        << std::setw(20) << "transpose_copy_us" << std::setw(18)
-        << "transpose_sync_us" << std::setw(14) << "ew_comm_us"
-        << std::setw(14) << "ew_sync_us" << std::setw(16)
-        << "phase_sum_us" << std::setw(14) << "total_us" << std::setw(22)
-        << "total_minus_sum_us" << "\n";
-    out << std::string(include_input_copy ? 156 : 140, '-') << "\n";
     for (const auto& result : results) {
       if (!result.phase_timing.has_value()) {
         continue;
@@ -196,6 +220,18 @@ void write_console(std::ostream& out,
       const auto& phase = *result.phase_timing;
       constexpr double us = 1.0e6;
       out << std::setw(8) << result.halo_words;
+      if (stream_ordered_phases) {
+        out << std::setw(18)
+            << phase.north_south_communication_enqueue_seconds * us
+            << std::setw(22) << phase.transpose_copy_enqueue_seconds * us
+            << std::setw(18)
+            << phase.east_west_communication_enqueue_seconds * us
+            << std::setw(18) << phase.final_stream_sync_seconds * us
+            << std::setw(16) << phase.phase_sum_seconds * us << std::setw(14)
+            << phase_total_exchange(phase, result) * us << std::setw(22)
+            << phase_total_minus_sum(phase) * us << "\n";
+        continue;
+      }
       if (include_input_copy) {
         out << std::setw(16) << phase.input_device_copy_seconds * us;
       }
@@ -225,7 +261,8 @@ void write_csv(const std::string& path,
          "max_average_seconds,root_world_rank,root_cart_rank,root_row,"
          "root_col,root_north,root_south,root_east,root_west,"
          "memory_location,mpi_library_version,hip_runtime_version,"
-         "validation_enabled,validation_passed";
+         "rccl_sync_mode,synchronization_model,validation_enabled,"
+         "validation_passed";
   if (include_phase_timing) {
     out << ",phase_input_device_copy_seconds,"
            "phase_north_south_mpi_seconds,"
@@ -238,6 +275,10 @@ void write_csv(const std::string& path,
            "phase_transpose_copy_seconds,"
            "phase_transpose_sync_seconds,"
            "phase_east_west_communication_seconds,"
+           "phase_north_south_communication_enqueue_seconds,"
+           "phase_transpose_copy_enqueue_seconds,"
+           "phase_east_west_communication_enqueue_seconds,"
+           "phase_final_stream_sync_seconds,"
            "phase_sum_seconds,"
            "phase_unattributed_seconds,"
            "phase_total_exchange_seconds,"
@@ -263,6 +304,10 @@ void write_csv(const std::string& path,
     write_json_string(out, result.metadata.mpi_library_version);
     out << ',';
     write_json_string(out, result.metadata.hip_runtime_version);
+    out << ',';
+    write_json_string(out, result.metadata.rccl_sync_mode);
+    out << ',';
+    write_json_string(out, result.metadata.synchronization_model);
     out << ',' << (result.metadata.validation_enabled ? "true" : "false")
         << ',' << (result.metadata.validation_passed ? "true" : "false");
     if (include_phase_timing) {
@@ -279,11 +324,15 @@ void write_csv(const std::string& path,
             << phase.transpose_copy_seconds << ','
             << phase.transpose_sync_seconds << ','
             << phase.east_west_communication_seconds << ','
+            << phase.north_south_communication_enqueue_seconds << ','
+            << phase.transpose_copy_enqueue_seconds << ','
+            << phase.east_west_communication_enqueue_seconds << ','
+            << phase.final_stream_sync_seconds << ','
             << phase.phase_sum_seconds << ',' << phase.unattributed_seconds
             << ',' << phase_total_exchange(phase, result) << ','
             << phase_total_minus_sum(phase);
       } else {
-        out << ",,,,,,,,,,,,,,,";
+        out << ",,,,,,,,,,,,,,,,,,,";
       }
     }
     out << '\n';
@@ -341,6 +390,9 @@ void write_json(const std::string& path,
     out << "        \"rccl_stage\": ";
     write_json_string(out, r.metadata.rccl_stage);
     out << ",\n";
+    out << "        \"rccl_sync_mode\": ";
+    write_json_string(out, r.metadata.rccl_sync_mode);
+    out << ",\n";
     out << "        \"rccl_plugin_root\": ";
     write_json_string(out, r.metadata.rccl_plugin_root);
     out << ",\n";
@@ -370,6 +422,9 @@ void write_json(const std::string& path,
       out << ",\n";
       out << "          \"synchronization_model\": ";
       write_json_string(out, r.metadata.synchronization_model);
+      out << ",\n";
+      out << "          \"active_phases\": ";
+      write_json_string(out, r.metadata.phase_timing_active_phases);
       out << "\n";
       out << "        },\n";
     }
@@ -436,6 +491,14 @@ void write_json(const std::string& path,
           << phase.east_west_communication_seconds << ",\n";
       out << "        \"east_west_sync_seconds\": "
           << phase.east_west_sync_seconds << ",\n";
+      out << "        \"north_south_communication_enqueue_seconds\": "
+          << phase.north_south_communication_enqueue_seconds << ",\n";
+      out << "        \"transpose_copy_enqueue_seconds\": "
+          << phase.transpose_copy_enqueue_seconds << ",\n";
+      out << "        \"east_west_communication_enqueue_seconds\": "
+          << phase.east_west_communication_enqueue_seconds << ",\n";
+      out << "        \"final_stream_sync_seconds\": "
+          << phase.final_stream_sync_seconds << ",\n";
       out << "        \"phase_sum_seconds\": " << phase.phase_sum_seconds
           << ",\n";
       out << "        \"unattributed_seconds\": "

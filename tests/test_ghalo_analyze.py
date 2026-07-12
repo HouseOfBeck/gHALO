@@ -86,6 +86,7 @@ def write_result_dir(
     metadata_files=None,
     timings=None,
     phase_timing=None,
+    rccl_sync_mode: str = "",
 ) -> Path:
     path = root / name
     path.mkdir(parents=True)
@@ -96,6 +97,8 @@ def write_result_dir(
             "memory_location": memory,
             "ranks": [],
         }
+        if rccl_sync_mode:
+            metadata["rccl_sync_mode"] = rccl_sync_mode
         if nodes_metadata is not None:
             metadata["nodes"] = nodes_metadata
         if ranks_per_node_metadata is not None:
@@ -385,6 +388,69 @@ class GhaloAnalyzeTests(unittest.TestCase):
         )
         rows = analyze.summary_rows(run, phase_timing=True)
         self.assertIn("phase_north_south_communication_seconds", rows[0])
+
+    def test_rccl_stream_ordered_phase_category_calculation(self) -> None:
+        phase = {
+            "north_south_communication_enqueue_seconds": 0.0000002,
+            "transpose_copy_enqueue_seconds": 0.0000003,
+            "east_west_communication_enqueue_seconds": 0.0000004,
+            "final_stream_sync_seconds": 0.000009,
+            "phase_sum_seconds": 0.0000099,
+            "total_exchange_seconds": 0.000010,
+            "total_minus_sum_of_phase_maxima_seconds": 0.0000001,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            run = analyze.load_run(
+                str(
+                    write_result_dir(
+                        Path(tmp),
+                        "rccl-stream-phase",
+                        backend="RCCLBackend",
+                        phase_timing=phase,
+                        timings={2: 0.000010},
+                        rccl_sync_mode="stream-ordered",
+                    )
+                )
+            )
+        self.assertEqual(run.rccl_sync_mode, "stream-ordered")
+        self.assertIn("stream-ordered", run.label)
+        result = run.results[0]
+        categories = analyze.phase_categories(result)
+        self.assertAlmostEqual(categories["synchronization_total_seconds"], 0.000009)
+        rows = analyze.summary_rows(run, phase_timing=True)
+        self.assertIn("phase_final_stream_sync_seconds", rows[0])
+
+    def test_rccl_sync_mode_is_compatibility_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            conservative = analyze.load_run(
+                str(
+                    write_result_dir(
+                        root,
+                        "rccl-conservative",
+                        backend="RCCLBackend",
+                        rccl_sync_mode="conservative",
+                    )
+                )
+            )
+            stream_ordered = analyze.load_run(
+                str(
+                    write_result_dir(
+                        root,
+                        "rccl-stream",
+                        backend="RCCLBackend",
+                        rccl_sync_mode="stream-ordered",
+                    )
+                )
+            )
+        with self.assertRaises(analyze.AnalysisError):
+            analyze.aggregate_rows([conservative, stream_ordered], allow_mixed=False, group_by=[])
+        rows = analyze.aggregate_rows(
+            [conservative, stream_ordered], allow_mixed=True, group_by=["backend"]
+        )
+        groups = {row["group_rccl_sync_mode"] for row in rows}
+        self.assertEqual(groups, {"conservative", "stream-ordered"})
+        self.assertEqual(len({row["group"] for row in rows}), 2)
 
     def test_concise_labels_and_borg_active_system(self) -> None:
         frontier = analyze.load_run(str(DATA / "repeat_a"))

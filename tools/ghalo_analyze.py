@@ -41,6 +41,10 @@ PHASE_FIELDS = (
     "east_west_mpi_seconds",
     "east_west_communication_seconds",
     "east_west_sync_seconds",
+    "north_south_communication_enqueue_seconds",
+    "transpose_copy_enqueue_seconds",
+    "east_west_communication_enqueue_seconds",
+    "final_stream_sync_seconds",
     "phase_sum_seconds",
     "unattributed_seconds",
     "total_exchange_seconds",
@@ -64,6 +68,13 @@ GENERIC_PHASE_PLOT_FIELDS = (
     "transpose_sync_seconds",
     "east_west_communication_seconds",
     "east_west_sync_seconds",
+)
+
+STREAM_ORDERED_PHASE_PLOT_FIELDS = (
+    "north_south_communication_enqueue_seconds",
+    "transpose_copy_enqueue_seconds",
+    "east_west_communication_enqueue_seconds",
+    "final_stream_sync_seconds",
 )
 
 
@@ -110,6 +121,8 @@ class Run:
             if ranks is not None:
                 rank_kind = "GPU rank" if self.memory_location == "device" else "rank"
                 parts.append(plural(ranks, rank_kind))
+            if self.rccl_sync_mode:
+                parts.append(self.rccl_sync_mode)
             if "repeat" in self.result_path.name.lower():
                 parts.append("repeat")
             return " | ".join(parts)
@@ -128,6 +141,12 @@ class Run:
         if not self.results:
             return ""
         return str(self.results[0].metadata.get("memory_location", ""))
+
+    @property
+    def rccl_sync_mode(self) -> str:
+        if not self.results:
+            return ""
+        return str(self.results[0].metadata.get("rccl_sync_mode", ""))
 
     @property
     def ranks(self) -> Optional[int]:
@@ -518,6 +537,8 @@ def result_from_csv(row: Dict[str, str], source: Path) -> RunResult:
         "memory_location": row.get("memory_location", ""),
         "mpi_library_version": unquote_csv_string(row.get("mpi_library_version", "")),
         "hip_runtime_version": unquote_csv_string(row.get("hip_runtime_version", "")),
+        "rccl_sync_mode": unquote_csv_string(row.get("rccl_sync_mode", "")),
+        "synchronization_model": unquote_csv_string(row.get("synchronization_model", "")),
         "validation_enabled": row.get("validation_enabled", ""),
         "validation_passed": row.get("validation_passed", ""),
         "nodes": row.get("nodes", ""),
@@ -582,6 +603,7 @@ def effective_gib_per_second(result: RunResult) -> float:
 
 def phase_categories(result: RunResult) -> Dict[str, float]:
     phase = result.phase_timing or {}
+    final_stream_sync = phase.get("final_stream_sync_seconds", 0.0)
     has_generic_phase = any(
         abs(phase.get(name, 0.0)) > 0.0
         for name in (
@@ -589,6 +611,10 @@ def phase_categories(result: RunResult) -> Dict[str, float]:
             "transpose_copy_seconds",
             "transpose_sync_seconds",
             "east_west_communication_seconds",
+            "north_south_communication_enqueue_seconds",
+            "transpose_copy_enqueue_seconds",
+            "east_west_communication_enqueue_seconds",
+            "final_stream_sync_seconds",
             "total_exchange_seconds",
         )
     )
@@ -621,6 +647,7 @@ def phase_categories(result: RunResult) -> Dict[str, float]:
         phase.get("north_south_sync_seconds", 0.0)
         + transpose_sync
         + phase.get("east_west_sync_seconds", 0.0)
+        + final_stream_sync
     )
     return {
         "device_copy_total_seconds": device_copy,
@@ -940,6 +967,7 @@ def compatibility_key(run: Run) -> Tuple[Any, ...]:
         run.ranks,
         run.nodes,
         run.cartesian,
+        run.rccl_sync_mode,
         bytes_by_halo,
         run.phase_timing_enabled,
     )
@@ -958,6 +986,8 @@ def grouping_key(run: Run, group_by: Sequence[str]) -> Tuple[Any, ...]:
             values.append(run.ranks)
         else:
             raise AnalysisError(f"unsupported group-by field {name}")
+    if run.rccl_sync_mode:
+        values.append(run.rccl_sync_mode)
     return tuple(values)
 
 
@@ -966,6 +996,9 @@ def aggregate_group_metadata(run: Run, key: Tuple[Any, ...], group_by: Sequence[
         metadata = {
             f"group_{name}": value for name, value in zip(group_by, key)
         }
+        extra_values = key[len(group_by):]
+        if extra_values:
+            metadata["group_rccl_sync_mode"] = extra_values[0]
         label_parts = []
         for name, value in zip(group_by, key):
             if value in (None, ""):
@@ -978,6 +1011,8 @@ def aggregate_group_metadata(run: Run, key: Tuple[Any, ...], group_by: Sequence[
                 label_parts.append(plural(int(value), "rank"))
             else:
                 label_parts.append(str(value))
+        if extra_values and extra_values[0]:
+            label_parts.append(str(extra_values[0]))
         metadata["group"] = " | ".join(label_parts) if label_parts else "all runs"
         return metadata
 
@@ -996,6 +1031,8 @@ def aggregate_group_metadata(run: Run, key: Tuple[Any, ...], group_by: Sequence[
         label_parts.append(plural(run.ranks, "rank"))
     if run.cartesian:
         label_parts.append(run.cartesian)
+    if run.rccl_sync_mode:
+        label_parts.append(run.rccl_sync_mode)
     return {
         "group": " | ".join(label_parts) if label_parts else run.label,
         "group_backend": run.backend,
@@ -1006,6 +1043,7 @@ def aggregate_group_metadata(run: Run, key: Tuple[Any, ...], group_by: Sequence[
         "group_ranks_per_node": run.ranks_per_node if run.ranks_per_node is not None else "",
         "group_cartesian_dimensions": run.cartesian,
         "group_phase_timing_enabled": run.phase_timing_enabled,
+        "group_rccl_sync_mode": run.rccl_sync_mode,
         "group_bytes_per_rank_by_halo": bytes_by_halo,
     }
 
@@ -1390,10 +1428,15 @@ def command_plot(args: argparse.Namespace) -> int:
             "rccl" in first_result.backend.lower()
             or "rccl" in first_result.algorithm.lower()
         )
+        has_stream_ordered_phases = any(
+            abs(first_phase.get(name, 0.0)) > 0.0
+            for name in STREAM_ORDERED_PHASE_PLOT_FIELDS
+        )
         phase_plot_fields = (
-            GENERIC_PHASE_PLOT_FIELDS
-            if is_generic_backend
-            or any(
+            STREAM_ORDERED_PHASE_PLOT_FIELDS
+            if has_stream_ordered_phases
+            else GENERIC_PHASE_PLOT_FIELDS
+            if is_generic_backend or any(
                 abs(first_phase.get(name, 0.0)) > 0.0
                 for name in GENERIC_PHASE_PLOT_FIELDS
             )

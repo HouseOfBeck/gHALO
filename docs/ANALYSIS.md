@@ -130,12 +130,13 @@ the reported value is linearly interpolated.
 
 Aggregates require compatible configurations by default. Compatibility includes
 backend, rank count, node count when known, Cartesian dimensions, bytes per
-rank for every halo size, and phase-timing state. Use `--allow-mixed` with
+rank for every halo size, RCCL synchronization mode, and phase-timing state. Use `--allow-mixed` with
 `--group-by system`, `--group-by backend`, `--group-by nodes`, or
 `--group-by ranks` when unlike runs should be grouped rather than rejected.
 Aggregate output uses readable group labels while retaining complete grouping
 metadata in CSV and JSON columns such as backend, ranks, nodes, Cartesian
-dimensions, phase-timing state, and bytes per rank by halo size.
+dimensions, phase-timing state, RCCL synchronization mode, and bytes per rank
+by halo size.
 
 ## Fixed-Message-Size Scaling
 
@@ -383,6 +384,12 @@ These category totals are sums of independently `MPI_MAX`-reduced phase
 maxima. They may exceed the independently reduced complete exchange time. The
 analyzer preserves negative total-minus-phase-sum values and does not rename
 them as missing work.
+
+For RCCL, `rccl_sync_mode` is compatibility metadata. Conservative and
+stream-ordered runs are not aggregated together unless explicitly mixed, and
+mixed backend groups still retain sync mode as a grouping discriminator.
+Stream-ordered phase plots show enqueue phases plus `final_stream_sync`; they
+do not reinterpret enqueue time as communication completion time.
 
 ## Output Directory
 

@@ -120,20 +120,33 @@ normal benchmark timing results.
 
 ## Stream Model
 
-The initial design should use one explicit HIP stream owned by the RCCL backend.
-RCCL operations and required HIP copies should be issued on that stream.
+The implementation uses one explicit HIP stream owned by the RCCL backend.
+RCCL operations and required HIP copies are issued on that stream.
 
 The intended final design should avoid `hipDeviceSynchronize` in the timed path
 where stream ordering is sufficient. Correctness-first stream synchronization
 may be used initially, but each host synchronization point must be documented.
 RCCL work must be complete before a timed exchange is considered complete.
 
-RCCL phase timing is implemented as a diagnostic mode. It records grouped
-north/south RCCL work, the north/south stream synchronization, the intermediate
-device copy, the copy synchronization, grouped east/west RCCL work, and the
-final stream synchronization. The implementation keeps the correctness-first
-stream synchronizations in place; they may later be replaced by a lower-overhead
-stream-aware mechanism only after correctness is preserved.
+Two synchronization modes are available:
+
+- `conservative`: the default correctness reference. It enqueues north/south
+  RCCL work, synchronizes the stream, enqueues the intermediate device copy,
+  synchronizes the stream, enqueues east/west RCCL work, and synchronizes the
+  stream again.
+- `stream-ordered`: experimental. It enqueues the input copy, north/south RCCL
+  work, intermediate device copy, and east/west RCCL work on the same backend
+  stream, then performs one final stream synchronization.
+
+The stream-ordered mode depends on all HIP copies and RCCL send/receive calls
+using the same non-default backend stream, and on RCCL honoring stream ordering
+for the point-to-point API. It must be validated for every topology edge case
+before its timings are interpreted.
+
+RCCL phase timing is implemented as a diagnostic mode. Conservative mode reports
+communication, copy, and synchronization phases. Stream-ordered mode reports
+host enqueue phases plus the one final stream synchronization; enqueue phases
+are not communication-completion times.
 
 ## Message Ordering And Deadlock Safety
 
@@ -165,8 +178,8 @@ RCCL validation should reuse the current deterministic patterned data strategy:
 - fail collectively with rank, topology, neighbor, expected value, and actual
   value.
 
-Validation must cover 1x1, 1x2, 2x2, multi-node, Frontier, and Borg cases. It
-must remain outside the timed loop.
+Validation must cover 1x1, 1x2, 2x1, 2x2, 2x4, 4x4, multi-node, Frontier, and
+Borg cases in both synchronization modes. It must remain outside the timed loop.
 
 ## Timing Semantics
 
@@ -182,6 +195,11 @@ before timing stops. Optional RCCL phase timing is diagnostic and does not
 replace the primary metric. Each phase is locally averaged and independently
 reduced with `MPI_MAX`, matching the MPI-HIP phase timing aggregation model.
 The phase sum is not forced to match the total exchange maximum.
+
+`--rccl-sync-mode conservative` is the default. Use
+`--rccl-sync-mode stream-ordered` only for experimental validation and
+comparison runs. Stage B remains a conservative north/south-only debugging path;
+stream-ordered mode applies only to the full RCCL backend.
 
 ## Error Handling
 

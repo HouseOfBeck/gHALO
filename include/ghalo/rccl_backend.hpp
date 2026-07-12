@@ -22,7 +22,10 @@ namespace ghalo {
 
 class RCCLBackend final : public Backend {
 public:
-  RCCLBackend(bool validate, bool allow_oversubscription, bool stage_b_only);
+  enum class SyncMode { Conservative, StreamOrdered };
+
+  RCCLBackend(bool validate, bool allow_oversubscription, bool stage_b_only,
+              const std::string& sync_mode);
   ~RCCLBackend() override;
 
   RCCLBackend(const RCCLBackend&) = delete;
@@ -62,6 +65,10 @@ private:
     double transpose_sync_seconds{};
     double east_west_communication_seconds{};
     double east_west_sync_seconds{};
+    double north_south_communication_enqueue_seconds{};
+    double transpose_copy_enqueue_seconds{};
+    double east_west_communication_enqueue_seconds{};
+    double final_stream_sync_seconds{};
   };
 
   void initialize_topology();
@@ -72,6 +79,7 @@ private:
   void allocate_buffers(std::size_t halo_words);
   void fill_pattern();
   void fill_rank();
+  void enqueue_hoew_to_hins_copy();
   void copy_hoew_to_hins();
   void enqueue_north_south();
   void exchange_north_south();
@@ -79,6 +87,9 @@ private:
   void copy_hons_to_hiew();
   void enqueue_east_west();
   void exchange_east_west();
+  void exchange_conservative();
+  void exchange_stream_ordered();
+  void exchange_stream_ordered_with_phase_timing();
   void synchronize_stream(const char* operation);
   double reduced_phase_average(double local_total_seconds,
                                int iterations) const;
@@ -100,6 +111,7 @@ private:
   bool validate_ = true;
   bool allow_oversubscription_ = false;
   bool stage_b_only_ = false;
+  SyncMode sync_mode_ = SyncMode::Conservative;
   bool phase_timing_enabled_ = false;
   bool phase_timing_collecting_ = false;
   bool validation_failed_ = false;
