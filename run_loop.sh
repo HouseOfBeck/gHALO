@@ -316,7 +316,7 @@ run_benchmark_result \
     --rccl-sync-mode conservative \
     --validate \
     --target-seconds 0.1 \
-    --label rccl_conservative_validation-1node-8ranks
+    --label conservative_validation-1node-8ranks
 
 run_benchmark_result \
   "rccl-conservative-2nodes-16ranks" \
@@ -349,7 +349,7 @@ run_benchmark_result \
     --rccl-sync-mode stream-ordered \
     --validate \
     --target-seconds 0.1 \
-    --label rccl_stream-ordered_validation-1node-8ranks
+    --label stream-ordered_validation-1node-8ranks
 
 run_benchmark_result \
   "rccl-stream-ordered-2nodes-16ranks" \
@@ -398,7 +398,7 @@ run_benchmark_result \
     --validate \
     --phase-timing \
     --target-seconds 3 \
-    --label rccl_stream-ordered_phase-1node-8ranks
+    --label stream-ordered_phase-1node-8ranks
 
 echo
 echo "============================================================"
