@@ -244,6 +244,9 @@ ghalo_write_system_resolution "${result_dir}/system-resolution.txt" \
   printf 'result_category=%s\n' "${category}"
   printf 'rocm_version=%s\n' "${rocm_version}"
   printf 'loaded_rocm_module=%s\n' "${GHALO_LOADED_ROCM_MODULE:-}"
+  printf 'min_halo=%s\n' "${min_halo}"
+  printf 'max_halo=%s\n' "${max_halo}"
+  printf 'halo_multiplier=%s\n' "${halo_multiplier}"
 } >"${result_dir}/result-metadata.txt"
 if [[ -n "${GHALO_SUBMIT_COMMAND:-}" || -n "${SLURM_JOB_ID:-}" ]]; then
   {
