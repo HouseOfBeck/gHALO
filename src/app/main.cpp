@@ -33,13 +33,9 @@ std::unique_ptr<ghalo::Backend> make_backend(const ghalo::CliOptions& options) {
   }
   if (options.backend == "rccl") {
 #ifdef GHALO_HAVE_RCCL
-    if (!options.rccl_stage_b) {
-      throw std::runtime_error(
-          "RCCL backend currently implements north/south validation only; "
-          "full halo exchange is not implemented");
-    }
     return std::make_unique<ghalo::RCCLBackend>(
-        options.validate, options.allow_gpu_oversubscription);
+        options.validate, options.allow_gpu_oversubscription,
+        options.rccl_stage_b);
 #else
     throw std::runtime_error(
         "backend rccl requested, but gHALO was not built with "

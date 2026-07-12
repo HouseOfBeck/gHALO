@@ -102,6 +102,20 @@ void check_north_south_plan(const ConceptualTopology& topology) {
                               .north);
 }
 
+float conceptual_pattern_value(int source_rank, int segment, int halo_words,
+                               int index) {
+  return static_cast<float>(source_rank * 100000 + segment * 10000 +
+                            halo_words * 10 + (index % 10));
+}
+
+void test_halo_buffer_layout_helpers() {
+  assert(ghalo::halo_n_offset() == 0);
+  assert(ghalo::halo_two_n_offset(2) == 2);
+  assert(ghalo::halo_buffer_words(2) == 6);
+  assert(ghalo::halo_two_n_offset(1024) == 1024);
+  assert(ghalo::halo_buffer_words(1024) == 3072);
+}
+
 void test_self_copy_topologies() {
   check_self_copy_decisions(topology_for(1, 1, 0), true, true);
 
@@ -111,6 +125,42 @@ void test_self_copy_topologies() {
   for (int rank = 0; rank < 4; ++rank) {
     check_self_copy_decisions(topology_for(2, 2, rank), false, false);
   }
+}
+
+void test_full_halo_corner_expectations() {
+  constexpr int halo_words = 8;
+  const int expected_corner_rank_by_rank[] = {3, 2, 1, 0};
+  for (int rank = 0; rank < 4; ++rank) {
+    const auto topology = topology_for(2, 2, rank);
+    const int north_east =
+        topology_for(topology.rows, topology.cols, topology.north).east;
+    const int south_west =
+        topology_for(topology.rows, topology.cols, topology.south).west;
+
+    assert(north_east == expected_corner_rank_by_rank[rank]);
+    assert(south_west == expected_corner_rank_by_rank[rank]);
+    assert(conceptual_pattern_value(north_east, 1, halo_words, 0) ==
+           static_cast<float>(north_east * 100000 + 10000 +
+                              halo_words * 10));
+    const float expected_south_west =
+        static_cast<float>(south_west * 100000 + 20000 + halo_words * 10 +
+                           (halo_words % 10));
+    assert(conceptual_pattern_value(south_west, 2, halo_words, halo_words) ==
+           expected_south_west);
+  }
+}
+
+void test_bytes_per_rank_consistency() {
+  constexpr std::size_t halo_words = 1024;
+  constexpr std::size_t word_bytes = sizeof(float);
+  const std::size_t n_message_bytes = halo_words * word_bytes;
+  const std::size_t two_n_message_bytes = 2 * halo_words * word_bytes;
+  const std::size_t total_exchange_bytes_per_rank =
+      6 * halo_words * word_bytes;
+
+  assert(n_message_bytes == 4096);
+  assert(two_n_message_bytes == 8192);
+  assert(total_exchange_bytes_per_rank == 24576);
 }
 
 void test_north_south_stage_b_conceptual_plans() {
@@ -332,8 +382,11 @@ void test_output_with_phase_timing() {
 } // namespace
 
 int main() {
+  test_halo_buffer_layout_helpers();
   test_self_copy_topologies();
   test_north_south_stage_b_conceptual_plans();
+  test_full_halo_corner_expectations();
+  test_bytes_per_rank_consistency();
   test_phase_sum_calculation();
   test_unsupported_phase_timing();
   test_cli_phase_timing_parse();

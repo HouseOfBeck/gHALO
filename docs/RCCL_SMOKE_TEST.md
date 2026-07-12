@@ -1,7 +1,7 @@
-# RCCL Smoke And Stage B Validation
+# RCCL Smoke And Validation
 
 This document describes the standalone RCCL smoke test and the integrated RCCL
-Stage B validation path.
+backend validation paths.
 
 ## Standalone Smoke Test
 
@@ -34,13 +34,32 @@ srun -N 1 -n 8 --ntasks-per-node=8 \
 The standalone smoke test uses a ring pattern. It is a bring-up diagnostic, not
 the HALO benchmark.
 
+## Integrated Stage C
+
+The default `--backend rccl` path now runs the full two-dimensional halo
+exchange:
+
+1. north/south RCCL exchange;
+2. intermediate `hons` to `hiew` device copy;
+3. east/west RCCL exchange;
+4. full validation with the same expected values as MPI-HIP.
+
+Run full RCCL validation with:
+
+```sh
+srun -N 1 -n 8 --ntasks-per-node=8 \
+  builds/borg/rccl/ghalo \
+  --backend rccl \
+  --validate \
+  --target-seconds 0.1
+```
+
+The full path participates in the normal gHALO timing loop after validation.
+It does not implement RCCL phase timing or make performance-comparison claims.
+
 ## Integrated Stage B
 
-The RCCL backend now includes Stage B integration for north/south halo
-correctness. This path uses the normal gHALO application, topology, validation
-patterns, HIP stream ownership, and RCCL communicator setup.
-
-Run it explicitly with:
+Stage B remains available as a north/south-only debugging path:
 
 ```sh
 srun -N 1 -n 8 --ntasks-per-node=8 \
@@ -70,27 +89,31 @@ Stage B does not implement:
 - performance comparison;
 - scaling claims.
 
-Without `--rccl-stage-b`, `--backend rccl` fails clearly because the full halo
-exchange is not implemented. This prevents partial north/south correctness
-runs from being mistaken for production benchmark results.
+Stage B does not emit normal benchmark timing results. It exists so
+north/south RCCL behavior can be debugged independently of transpose and
+east/west communication.
 
 ## Borg Validation Matrix
 
-Correctness runs should include:
+Full correctness runs should include:
 
 ```sh
 srun -N 1 -n 1 --ntasks-per-node=1 builds/borg/rccl/ghalo \
-  --backend rccl --rccl-stage-b --validate --target-seconds 0.1
+  --backend rccl --validate --target-seconds 0.1
 
 srun -N 1 -n 2 --ntasks-per-node=2 builds/borg/rccl/ghalo \
-  --backend rccl --rccl-stage-b --validate --target-seconds 0.1
+  --backend rccl --validate --target-seconds 0.1
+
+srun -N 1 -n 4 --ntasks-per-node=4 builds/borg/rccl/ghalo \
+  --backend rccl --validate --target-seconds 0.1
 
 srun -N 1 -n 8 --ntasks-per-node=8 builds/borg/rccl/ghalo \
-  --backend rccl --rccl-stage-b --validate --target-seconds 0.1
+  --backend rccl --validate --target-seconds 0.1
 
 srun -N 2 -n 16 --ntasks-per-node=8 builds/borg/rccl/ghalo \
-  --backend rccl --rccl-stage-b --validate --target-seconds 0.1
+  --backend rccl --validate --target-seconds 0.1
 ```
 
-These are correctness runs only. Do not compare Stage B timings against
-`mpi-hip`.
+Also rerun Stage B at one and two nodes when debugging RCCL transport issues.
+Do not compare RCCL timings against `mpi-hip` until phase timing and
+synchronization policy have been studied.

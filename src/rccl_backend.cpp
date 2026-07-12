@@ -1,5 +1,7 @@
 #include "ghalo/rccl_backend.hpp"
 
+#include "ghalo/exchange.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstdio>
@@ -184,8 +186,10 @@ private:
   std::size_t bytes_ = 0;
 };
 
-RCCLBackend::RCCLBackend(bool validate, bool allow_oversubscription)
-    : validate_(validate), allow_oversubscription_(allow_oversubscription) {
+RCCLBackend::RCCLBackend(bool validate, bool allow_oversubscription,
+                         bool stage_b_only)
+    : validate_(validate), allow_oversubscription_(allow_oversubscription),
+      stage_b_only_(stage_b_only) {
   initialize_topology();
   initialize_local_rank();
   select_device();
@@ -193,7 +197,7 @@ RCCLBackend::RCCLBackend(bool validate, bool allow_oversubscription)
   hip_check(hipStreamCreate(&stream_), "hipStreamCreate");
   initialize_rccl_communicator();
   initialize_metadata();
-  print_stage_b_startup();
+  print_startup();
 }
 
 RCCLBackend::~RCCLBackend() {
@@ -206,6 +210,7 @@ RCCLBackend::~RCCLBackend() {
   }
   hons_.reset();
   hins_.reset();
+  hiew_.reset();
   hoew_.reset();
   if (stream_ != nullptr) {
     (void)hipStreamDestroy(stream_);
@@ -221,9 +226,13 @@ RCCLBackend::~RCCLBackend() {
   }
 }
 
-std::string RCCLBackend::name() const { return "RCCLBackend Stage B"; }
+std::string RCCLBackend::name() const {
+  return stage_b_only_ ? "RCCLBackend Stage B" : "RCCLBackend";
+}
 
-std::string RCCLBackend::algorithm() const { return "rccl-north-south-only"; }
+std::string RCCLBackend::algorithm() const {
+  return stage_b_only_ ? "rccl-north-south-only" : "rccl";
+}
 
 TopologyInfo RCCLBackend::topology() const { return topology_; }
 
@@ -239,11 +248,23 @@ void RCCLBackend::setup(std::size_t halo_words) {
   halo_words_ = halo_words;
   allocate_buffers(halo_words_);
   if (validate_) {
-    validate_north_south();
+    if (stage_b_only_) {
+      validate_north_south();
+    } else {
+      validate_full_exchange();
+    }
   }
 }
 
-void RCCLBackend::exchange() { fail_not_implemented(); }
+void RCCLBackend::exchange() {
+  if (stage_b_only_) {
+    fail_not_implemented();
+  }
+  copy_hoew_to_hins();
+  exchange_north_south();
+  copy_hons_to_hiew();
+  exchange_east_west();
+}
 
 void RCCLBackend::barrier() {
   mpi_check(MPI_Barrier(cart_comm_), "MPI_Barrier");
@@ -287,7 +308,7 @@ void RCCLBackend::run_development_validation(
   }
 }
 
-bool RCCLBackend::exchange_implemented() const { return false; }
+bool RCCLBackend::exchange_implemented() const { return !stage_b_only_; }
 
 void RCCLBackend::initialize_topology() {
   mpi_check(MPI_Comm_rank(MPI_COMM_WORLD, &topology_.world_rank),
@@ -405,7 +426,7 @@ void RCCLBackend::initialize_metadata() {
   metadata_.gpu_aware_mpi_requested = false;
   metadata_.validation_enabled = validate_;
   metadata_.validation_passed = !validate_;
-  metadata_.rccl_stage = "north-south-only";
+  metadata_.rccl_stage = stage_b_only_ ? "north-south-only" : "full";
   metadata_.hip_runtime_version =
       hip_runtime_version(rank(), local_rank_, selected_device_);
   metadata_.rccl_version = rccl_version(rank(), local_rank_, selected_device_);
@@ -486,19 +507,21 @@ void RCCLBackend::initialize_metadata() {
 }
 
 void RCCLBackend::allocate_buffers(std::size_t halo_words) {
-  const std::size_t bytes = 3 * halo_words * sizeof(float);
+  const std::size_t bytes = halo_buffer_words(halo_words) * sizeof(float);
   if (!hins_) {
     hins_ = std::make_unique<DeviceBuffer>();
     hons_ = std::make_unique<DeviceBuffer>();
+    hiew_ = std::make_unique<DeviceBuffer>();
     hoew_ = std::make_unique<DeviceBuffer>();
   }
   hins_->allocate(bytes, "hins", rank(), local_rank_, selected_device_);
   hons_->allocate(bytes, "hons", rank(), local_rank_, selected_device_);
+  hiew_->allocate(bytes, "hiew", rank(), local_rank_, selected_device_);
   hoew_->allocate(bytes, "hoew", rank(), local_rank_, selected_device_);
 }
 
 void RCCLBackend::fill_pattern() {
-  const std::size_t count = 3 * halo_words_;
+  const std::size_t count = halo_buffer_words(halo_words_);
   std::vector<float> host(count);
   for (std::size_t i = 0; i < count; ++i) {
     const int segment = i < halo_words_ ? 1 : 2;
@@ -512,6 +535,16 @@ void RCCLBackend::fill_pattern() {
             "hipStreamSynchronize after validation pattern");
 }
 
+void RCCLBackend::fill_rank() {
+  const std::size_t count = halo_buffer_words(halo_words_);
+  std::vector<float> host(count, static_cast<float>(rank()));
+  hip_check(hipMemcpyAsync(hoew_->data(), host.data(), count * sizeof(float),
+                           hipMemcpyHostToDevice, stream_),
+            "hipMemcpyAsync rank fill");
+  hip_check(hipStreamSynchronize(stream_),
+            "hipStreamSynchronize after rank fill");
+}
+
 void RCCLBackend::copy_hoew_to_hins() {
   hip_check(hipMemcpyAsync(hins_->data(), hoew_->data(), hoew_->bytes(),
                            hipMemcpyDeviceToDevice, stream_),
@@ -523,6 +556,8 @@ void RCCLBackend::copy_hoew_to_hins() {
 void RCCLBackend::exchange_north_south() {
   const std::size_t n = halo_words_;
   const std::size_t two_n = 2 * halo_words_;
+  const std::size_t n_offset = halo_n_offset();
+  const std::size_t two_n_offset = halo_two_n_offset(halo_words_);
   auto* hins = static_cast<float*>(hins_->data());
   auto* hons = static_cast<float*>(hons_->data());
 
@@ -531,19 +566,59 @@ void RCCLBackend::exchange_north_south() {
   }
 
   rccl_check(ncclGroupStart(), "ncclGroupStart north/south");
-  rccl_check(ncclSend(hins, n, ncclFloat, topology_.south, rccl_comm_, stream_),
+  rccl_check(ncclSend(hins + n_offset, n, ncclFloat, topology_.south,
+                      rccl_comm_, stream_),
              "ncclSend north/south N");
-  rccl_check(ncclRecv(hons, n, ncclFloat, topology_.north, rccl_comm_, stream_),
+  rccl_check(ncclRecv(hons + n_offset, n, ncclFloat, topology_.north,
+                      rccl_comm_, stream_),
              "ncclRecv north/south N");
-  rccl_check(ncclSend(hins + n, two_n, ncclFloat, topology_.north, rccl_comm_,
-                      stream_),
+  rccl_check(ncclSend(hins + two_n_offset, two_n, ncclFloat, topology_.north,
+                      rccl_comm_, stream_),
              "ncclSend north/south 2N");
-  rccl_check(ncclRecv(hons + n, two_n, ncclFloat, topology_.south, rccl_comm_,
-                      stream_),
+  rccl_check(ncclRecv(hons + two_n_offset, two_n, ncclFloat, topology_.south,
+                      rccl_comm_, stream_),
              "ncclRecv north/south 2N");
   rccl_check(ncclGroupEnd(), "ncclGroupEnd north/south");
   hip_check(hipStreamSynchronize(stream_),
             "hipStreamSynchronize after north/south RCCL");
+}
+
+void RCCLBackend::copy_hons_to_hiew() {
+  hip_check(hipMemcpyAsync(hiew_->data(), hons_->data(), hons_->bytes(),
+                           hipMemcpyDeviceToDevice, stream_),
+            "hipMemcpyAsync hons -> hiew");
+  hip_check(hipStreamSynchronize(stream_),
+            "hipStreamSynchronize after hons -> hiew");
+}
+
+void RCCLBackend::exchange_east_west() {
+  const std::size_t n = halo_words_;
+  const std::size_t two_n = 2 * halo_words_;
+  const std::size_t n_offset = halo_n_offset();
+  const std::size_t two_n_offset = halo_two_n_offset(halo_words_);
+  auto* hiew = static_cast<float*>(hiew_->data());
+  auto* hoew = static_cast<float*>(hoew_->data());
+
+  if (n == 0) {
+    return;
+  }
+
+  rccl_check(ncclGroupStart(), "ncclGroupStart east/west");
+  rccl_check(ncclSend(hiew + n_offset, n, ncclFloat, topology_.west,
+                      rccl_comm_, stream_),
+             "ncclSend east/west N");
+  rccl_check(ncclRecv(hoew + n_offset, n, ncclFloat, topology_.east,
+                      rccl_comm_, stream_),
+             "ncclRecv east/west N");
+  rccl_check(ncclSend(hiew + two_n_offset, two_n, ncclFloat, topology_.east,
+                      rccl_comm_, stream_),
+             "ncclSend east/west 2N");
+  rccl_check(ncclRecv(hoew + two_n_offset, two_n, ncclFloat, topology_.west,
+                      rccl_comm_, stream_),
+             "ncclRecv east/west 2N");
+  rccl_check(ncclGroupEnd(), "ncclGroupEnd east/west");
+  hip_check(hipStreamSynchronize(stream_),
+            "hipStreamSynchronize after east/west RCCL");
 }
 
 void RCCLBackend::validate_north_south() {
@@ -551,7 +626,7 @@ void RCCLBackend::validate_north_south() {
   copy_hoew_to_hins();
   exchange_north_south();
 
-  const std::size_t count = 3 * halo_words_;
+  const std::size_t count = halo_buffer_words(halo_words_);
   std::vector<float> host(count);
   hip_check(hipMemcpyAsync(host.data(), hons_->data(), count * sizeof(float),
                            hipMemcpyDeviceToHost, stream_),
@@ -607,14 +682,113 @@ void RCCLBackend::validate_north_south() {
     throw std::runtime_error("RCCL north/south validation failed");
   }
   metadata_.validation_passed = true;
+  fill_rank();
 }
 
-void RCCLBackend::print_stage_b_startup() const {
+void RCCLBackend::validate_full_exchange() {
+  fill_pattern();
+  copy_hoew_to_hins();
+  exchange_north_south();
+  copy_hons_to_hiew();
+  exchange_east_west();
+
+  const std::size_t count = halo_buffer_words(halo_words_);
+  std::vector<float> hons(count);
+  std::vector<float> hoew(count);
+  hip_check(hipMemcpyAsync(hons.data(), hons_->data(), count * sizeof(float),
+                           hipMemcpyDeviceToHost, stream_),
+            "hipMemcpyAsync validation hons");
+  hip_check(hipMemcpyAsync(hoew.data(), hoew_->data(), count * sizeof(float),
+                           hipMemcpyDeviceToHost, stream_),
+            "hipMemcpyAsync validation hoew");
+  hip_check(hipStreamSynchronize(stream_),
+            "hipStreamSynchronize after full validation copies");
+
+  const int north_east =
+      cart_rank(cart_comm_, (topology_.row + 1) % topology_.rows,
+                (topology_.col + 1) % topology_.cols);
+  const int south_west =
+      cart_rank(cart_comm_,
+                (topology_.row + topology_.rows - 1) % topology_.rows,
+                (topology_.col + topology_.cols - 1) % topology_.cols);
+
+  bool local_valid = true;
+  std::string first_mismatch;
+  auto check_value = [&](const char* direction, float actual, float expected,
+                         std::size_t index, int neighbor) {
+    if (local_valid && actual != expected) {
+      const std::size_t sample_count = std::min<std::size_t>(8, hoew.size());
+      std::vector<float> hoew_prefix(hoew.begin(),
+                                     hoew.begin() + sample_count);
+      std::vector<float> hons_prefix(hons.begin(),
+                                     hons.begin() + sample_count);
+      std::ostringstream message;
+      message << "RCCL full halo validation failed on rank " << rank()
+              << " local_rank " << local_rank_ << " direction " << direction
+              << " index " << index << ": expected " << expected
+              << ", actual " << actual << ", neighbor " << neighbor
+              << "; cart_dims=(" << topology_.rows << "," << topology_.cols
+              << ") cart_coords=(" << topology_.row << "," << topology_.col
+              << ") neighbors north=" << topology_.north
+              << " south=" << topology_.south << " east=" << topology_.east
+              << " west=" << topology_.west
+              << " hons_prefix=" << values_string(hons_prefix)
+              << " hoew_prefix=" << values_string(hoew_prefix);
+      first_mismatch = message.str();
+      local_valid = false;
+    }
+  };
+
+  for (std::size_t i = 0; i < halo_words_; ++i) {
+    check_value("north", hons[i],
+                pattern_value(topology_.north, 1, static_cast<int>(halo_words_),
+                              static_cast<int>(i)),
+                i, topology_.north);
+    check_value("east", hoew[i],
+                pattern_value(north_east, 1, static_cast<int>(halo_words_),
+                              static_cast<int>(i)),
+                i, north_east);
+  }
+  for (std::size_t i = halo_words_; i < count; ++i) {
+    check_value("south", hons[i],
+                pattern_value(topology_.south, 2, static_cast<int>(halo_words_),
+                              static_cast<int>(i)),
+                i, topology_.south);
+    check_value("west", hoew[i],
+                pattern_value(south_west, 2, static_cast<int>(halo_words_),
+                              static_cast<int>(i)),
+                i, south_west);
+  }
+
+  if (!local_valid) {
+    std::cerr << first_mismatch << '\n';
+  }
+
+  int local_ok = local_valid ? 1 : 0;
+  int global_ok = 0;
+  mpi_check(MPI_Allreduce(&local_ok, &global_ok, 1, MPI_INT, MPI_MIN,
+                          cart_comm_),
+            "MPI_Allreduce RCCL full validation");
+  if (rank() == 0) {
+    if (global_ok == 1) {
+      std::cout << "RCCL full halo validation PASSED\n";
+    } else {
+      std::cout << "RCCL full halo validation FAILED\n";
+    }
+  }
+  if (global_ok != 1) {
+    throw std::runtime_error("RCCL full halo validation failed");
+  }
+  metadata_.validation_passed = true;
+  fill_rank();
+}
+
+void RCCLBackend::print_startup() const {
   if (rank() != 0) {
     return;
   }
-  std::cout << "backend: RCCLBackend Stage B\n"
-            << "rccl_stage: north-south-only\n"
+  std::cout << "backend: " << name() << "\n"
+            << "rccl_stage: " << metadata_.rccl_stage << "\n"
             << "rocm_version: " << metadata_.rocm_version << "\n"
             << "hip_runtime_version: " << metadata_.hip_runtime_version << "\n"
             << "rccl_version: " << metadata_.rccl_version << "\n"
@@ -660,8 +834,8 @@ void RCCLBackend::rccl_check(ncclResult_t error, const char* operation) const {
 
 void RCCLBackend::fail_not_implemented() const {
   throw std::runtime_error(
-      "RCCL backend currently implements north/south validation only; full "
-      "halo exchange is not implemented");
+      "RCCL Stage B debug mode implements north/south validation only; full "
+      "halo exchange is available without --rccl-stage-b");
 }
 
 } // namespace ghalo

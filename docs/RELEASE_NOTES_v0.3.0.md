@@ -136,7 +136,8 @@ python3 tools/ghalo_analyze.py plot \
   internal exchange phases.
 - Independently `MPI_MAX`-reduced phase maxima may sum to more than the
   independently reduced total exchange maximum.
-- RCCL is not yet implemented.
+- RCCL phase timing, synchronization optimization, and performance comparisons
+  are not yet implemented.
 - GitHub-hosted CI does not test HIP, Cray MPICH, Slurm, GPU execution, or
   performance.
 - Large-system performance results remain system- and placement-dependent.
@@ -146,6 +147,7 @@ python3 tools/ghalo_analyze.py plot \
 - Continue validating MPI-HIP across larger Frontier and Borg placements.
 - Investigate lower-overhead synchronization for the MPI-HIP backend while
   preserving correctness and benchmark semantics.
+- Continue RCCL bring-up with phase timing and synchronization analysis.
 - Expand diagnostics from summary analysis toward topology and cluster-health
   reporting.
 - Begin RCCL backend design and implementation experiments.
