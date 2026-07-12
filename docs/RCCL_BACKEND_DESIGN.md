@@ -4,6 +4,11 @@ This document defines the architecture for the experimental gHALO RCCL backend.
 Stage C is implemented as a complete two-dimensional RCCL halo exchange. Stage
 B remains available as a north/south-only debugging path.
 
+Frontier and Borg GPU backend workflows default to ROCm 6.4.2. New `mpi-hip`
+and `rccl` comparison runs can therefore use the same ROCm stack. The RCCL OFI
+network plugin is loaded only for `rccl`; `mpi-hip` uses Cray MPICH GPU-aware
+MPI and does not load `rccl-net-plugin/1.0`.
+
 ## Purpose And Motivation
 
 The RCCL backend will allow gHALO to compare GPU-resident halo exchange over

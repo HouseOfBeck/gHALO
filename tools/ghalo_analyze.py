@@ -123,6 +123,8 @@ class Run:
                 parts.append(plural(ranks, rank_kind))
             if self.rccl_sync_mode:
                 parts.append(self.rccl_sync_mode)
+            if self.rocm_version:
+                parts.append(self.rocm_version)
             if "repeat" in self.result_path.name.lower():
                 parts.append("repeat")
             return " | ".join(parts)
@@ -147,6 +149,12 @@ class Run:
         if not self.results:
             return ""
         return str(self.results[0].metadata.get("rccl_sync_mode", ""))
+
+    @property
+    def rocm_version(self) -> str:
+        if not self.results:
+            return ""
+        return str(self.results[0].metadata.get("rocm_version", ""))
 
     @property
     def ranks(self) -> Optional[int]:
@@ -537,6 +545,7 @@ def result_from_csv(row: Dict[str, str], source: Path) -> RunResult:
         "memory_location": row.get("memory_location", ""),
         "mpi_library_version": unquote_csv_string(row.get("mpi_library_version", "")),
         "hip_runtime_version": unquote_csv_string(row.get("hip_runtime_version", "")),
+        "rocm_version": unquote_csv_string(row.get("rocm_version", "")),
         "rccl_sync_mode": unquote_csv_string(row.get("rccl_sync_mode", "")),
         "synchronization_model": unquote_csv_string(row.get("synchronization_model", "")),
         "validation_enabled": row.get("validation_enabled", ""),
@@ -967,6 +976,7 @@ def compatibility_key(run: Run) -> Tuple[Any, ...]:
         run.ranks,
         run.nodes,
         run.cartesian,
+        run.rocm_version,
         run.rccl_sync_mode,
         bytes_by_halo,
         run.phase_timing_enabled,
@@ -988,6 +998,8 @@ def grouping_key(run: Run, group_by: Sequence[str]) -> Tuple[Any, ...]:
             raise AnalysisError(f"unsupported group-by field {name}")
     if run.rccl_sync_mode:
         values.append(run.rccl_sync_mode)
+    if run.rocm_version:
+        values.append(run.rocm_version)
     return tuple(values)
 
 
@@ -998,7 +1010,8 @@ def aggregate_group_metadata(run: Run, key: Tuple[Any, ...], group_by: Sequence[
         }
         extra_values = key[len(group_by):]
         if extra_values:
-            metadata["group_rccl_sync_mode"] = extra_values[0]
+            metadata["group_rccl_sync_mode"] = run.rccl_sync_mode
+            metadata["group_rocm_version"] = run.rocm_version
         label_parts = []
         for name, value in zip(group_by, key):
             if value in (None, ""):
@@ -1011,8 +1024,10 @@ def aggregate_group_metadata(run: Run, key: Tuple[Any, ...], group_by: Sequence[
                 label_parts.append(plural(int(value), "rank"))
             else:
                 label_parts.append(str(value))
-        if extra_values and extra_values[0]:
-            label_parts.append(str(extra_values[0]))
+        if run.rccl_sync_mode:
+            label_parts.append(run.rccl_sync_mode)
+        if run.rocm_version:
+            label_parts.append(run.rocm_version)
         metadata["group"] = " | ".join(label_parts) if label_parts else "all runs"
         return metadata
 
@@ -1044,6 +1059,7 @@ def aggregate_group_metadata(run: Run, key: Tuple[Any, ...], group_by: Sequence[
         "group_cartesian_dimensions": run.cartesian,
         "group_phase_timing_enabled": run.phase_timing_enabled,
         "group_rccl_sync_mode": run.rccl_sync_mode,
+        "group_rocm_version": run.rocm_version,
         "group_bytes_per_rank_by_halo": bytes_by_halo,
     }
 

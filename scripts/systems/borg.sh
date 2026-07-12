@@ -18,16 +18,35 @@ ghalo_borg_load_common() {
 }
 
 ghalo_borg_load_gpu() {
+  local hip_compiler
+  local hip_library
   ghalo_borg_require_modules
   module load craype-accel-amd-gfx90a ||
     ghalo_die "failed to load craype-accel-amd-gfx90a on Borg"
-  module load rocm/6.2.4 ||
-    ghalo_die "failed to load required Borg ROCm module rocm/6.2.4"
-  export GHALO_LOADED_ROCM_MODULE=rocm/6.2.4
+  ghalo_borg_unload_rocm
+  module load rocm/6.4.2 ||
+    ghalo_die "failed to load required Borg ROCm module rocm/6.4.2"
+  export GHALO_LOADED_ROCM_MODULE=rocm/6.4.2
+  hip_compiler="$(command -v hipcc 2>/dev/null || true)"
+  [[ -n "${hip_compiler}" ]] ||
+    ghalo_die "Borg MPI-HIP setup requires hipcc from rocm/6.4.2"
+  ghalo_borg_path_matches_rocm_version "${hip_compiler}" "6.4.2" ||
+    ghalo_die "Borg MPI-HIP mixed ROCm configuration: hipcc='${hip_compiler}' does not match rocm/6.4.2"
+  hip_library="$(ghalo_borg_resolve_hip_library "${ROCM_PATH}")" ||
+    ghalo_die "Borg MPI-HIP setup could not find libamdhip64.so under ROCM_PATH='${ROCM_PATH}'"
+  ghalo_borg_path_matches_rocm_version "${hip_library}" "6.4.2" ||
+    ghalo_die "Borg MPI-HIP mixed ROCm configuration: libamdhip64='${hip_library}' does not match rocm/6.4.2"
+  export GHALO_RESOLVED_HIP_COMPILER="${hip_compiler}"
+  export GHALO_RESOLVED_HIP_LIBRARY="${hip_library}"
+  unset RCCL_ROOT
+  unset OLCF_OFI_NCCL_ROOT
+  unset GHALO_RESOLVED_RCCL_LIBRARY
 }
 
 ghalo_borg_unload_rocm() {
   ghalo_borg_require_modules
+  module unload rccl-net-plugin >/dev/null 2>&1 || true
+  module unload rccl-net-plugin/1.0 >/dev/null 2>&1 || true
   module unload rocm >/dev/null 2>&1 || true
   module unload rocm/6.2.4 >/dev/null 2>&1 || true
   module unload rocm/6.4.2 >/dev/null 2>&1 || true
@@ -48,6 +67,22 @@ ghalo_borg_resolve_rccl_library() {
     "${root}/lib64/librccl.so" \
     "${root}/lib/librccl.so.1" \
     "${root}/lib64/librccl.so.1"; do
+    if [[ -e "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+ghalo_borg_resolve_hip_library() {
+  local root="$1"
+  local candidate
+  for candidate in \
+    "${root}/lib/libamdhip64.so" \
+    "${root}/lib64/libamdhip64.so" \
+    "${root}/lib/libamdhip64.so.6" \
+    "${root}/lib64/libamdhip64.so.6"; do
     if [[ -e "${candidate}" ]]; then
       printf '%s\n' "${candidate}"
       return 0

@@ -385,11 +385,14 @@ maxima. They may exceed the independently reduced complete exchange time. The
 analyzer preserves negative total-minus-phase-sum values and does not rename
 them as missing work.
 
-For RCCL, `rccl_sync_mode` is compatibility metadata. Conservative and
-stream-ordered runs are not aggregated together unless explicitly mixed, and
-mixed backend groups still retain sync mode as a grouping discriminator.
-Stream-ordered phase plots show enqueue phases plus `final_stream_sync`; they
-do not reinterpret enqueue time as communication completion time.
+For GPU runs, ROCm version is compatibility metadata. Historical MPI-HIP runs
+collected with ROCm 6.2.4 and new runs collected with ROCm 6.4.2 are not
+aggregated together unless explicitly mixed. For RCCL, `rccl_sync_mode` is also
+compatibility metadata. Conservative and stream-ordered runs are not aggregated
+together unless explicitly mixed, and mixed backend groups still retain sync
+mode as a grouping discriminator. Stream-ordered phase plots show enqueue
+phases plus `final_stream_sync`; they do not reinterpret enqueue time as
+communication completion time.
 
 ## Output Directory
 

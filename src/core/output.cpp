@@ -261,7 +261,7 @@ void write_csv(const std::string& path,
          "max_average_seconds,root_world_rank,root_cart_rank,root_row,"
          "root_col,root_north,root_south,root_east,root_west,"
          "memory_location,mpi_library_version,hip_runtime_version,"
-         "rccl_sync_mode,synchronization_model,validation_enabled,"
+         "rocm_version,rccl_sync_mode,synchronization_model,validation_enabled,"
          "validation_passed";
   if (include_phase_timing) {
     out << ",phase_input_device_copy_seconds,"
@@ -304,6 +304,8 @@ void write_csv(const std::string& path,
     write_json_string(out, result.metadata.mpi_library_version);
     out << ',';
     write_json_string(out, result.metadata.hip_runtime_version);
+    out << ',';
+    write_json_string(out, result.metadata.rocm_version);
     out << ',';
     write_json_string(out, result.metadata.rccl_sync_mode);
     out << ',';

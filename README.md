@@ -64,6 +64,12 @@ post-run analysis tooling. RCCL synchronization optimization, production
 performance characterization, UCX, heat maps, and automated cluster-health
 diagnostics remain planned work.
 
+Frontier and Borg GPU workflows now default to ROCm 6.4.2 for both `mpi-hip`
+and `rccl`. MPI-HIP does not load `rccl-net-plugin/1.0`; RCCL does. Historical
+MPI-HIP results collected with ROCm 6.2.4 remain valid, but they are a distinct
+software configuration and should not be aggregated with ROCm 6.4.2 results
+without explicitly allowing mixed configurations.
+
 The development model assumes:
 
 - development happens on macOS or another workstation;

@@ -214,9 +214,13 @@ test_frontier_backend_specific_rocm_selection() (
 
   export OLCF_OFI_NCCL_ROOT="${plugin_root}"
   ghalo_system_setup_build mpi-hip
-  assert_eq rocm/6.2.4 "${GHALO_LOADED_ROCM_MODULE}" \
-    "Frontier mpi-hip selects ROCm 6.2.4"
-  assert_eq "${rocm624}" "${ROCM_PATH}" "Frontier mpi-hip ROCM_PATH"
+  assert_eq rocm/6.4.2 "${GHALO_LOADED_ROCM_MODULE}" \
+    "Frontier mpi-hip selects ROCm 6.4.2"
+  assert_eq "${rocm642}" "${ROCM_PATH}" "Frontier mpi-hip ROCM_PATH"
+  assert_eq "${expected_rocm642}/bin/hipcc" "${GHALO_RESOLVED_HIP_COMPILER}" \
+    "Frontier mpi-hip resolved hipcc"
+  assert_eq "${rocm642}/lib/libamdhip64.so" "${GHALO_RESOLVED_HIP_LIBRARY}" \
+    "Frontier mpi-hip resolved libamdhip64"
   if [[ -n "${OLCF_OFI_NCCL_ROOT+x}" ]]; then
     printf 'Frontier mpi-hip setup should unload rccl-net-plugin/1.0\n' >&2
     exit 1
@@ -303,12 +307,17 @@ test_frontier_rccl_mixed_rocm_versions_fail() (
 # shellcheck disable=SC2030,SC2031
 test_borg_environment_setup() (
   local bin_dir="${GHALO_TEST_TMPDIR}/ghalo-borg-workflow-bin"
+  local rocm642="${GHALO_TEST_TMPDIR}/ghalo-borg-workflow-rocm-6.4.2"
   local rocm_marker="${GHALO_TEST_TMPDIR}/ghalo-borg-rocm-loaded.txt"
-  mkdir -p "${bin_dir}"
+  local base_path
+  mkdir -p "${bin_dir}" "${rocm642}/bin" "${rocm642}/lib"
   printf '#!/usr/bin/env bash\nexit 0\n' >"${bin_dir}/CC"
   printf '#!/usr/bin/env bash\nexit 0\n' >"${bin_dir}/srun"
-  chmod +x "${bin_dir}/CC" "${bin_dir}/srun"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"${rocm642}/bin/hipcc"
+  : >"${rocm642}/lib/libamdhip64.so"
+  chmod +x "${bin_dir}/CC" "${bin_dir}/srun" "${rocm642}/bin/hipcc"
   export PATH="${bin_dir}:${PATH}"
+  base_path="${PATH}"
 
   # The mock is called indirectly by scripts/systems/borg.sh.
   # shellcheck disable=SC2317
@@ -320,7 +329,9 @@ test_borg_environment_setup() (
       PrgEnv-cray | craype-accel-amd-gfx90a)
         return 0
         ;;
-      rocm/6.2.4)
+      rocm/6.4.2)
+        export ROCM_PATH="${rocm642}"
+        export PATH="${rocm642}/bin:${base_path}"
         printf 'loaded\n' >"${rocm_marker}"
         return 0
         ;;
@@ -343,7 +354,7 @@ test_borg_environment_setup() (
   rm -f "${rocm_marker}"
   ghalo_system_setup_run mpi-hip
   assert_eq 1 "${MPICH_GPU_SUPPORT_ENABLED}" "Borg mpi-hip GPU support"
-  assert_contains 'loaded' "${rocm_marker}" "Borg ROCm 6.2.4 load"
+  assert_contains 'loaded' "${rocm_marker}" "Borg ROCm 6.4.2 load"
 )
 
 # This test mocks Borg modules inside a subshell to verify backend-specific
@@ -363,6 +374,7 @@ test_borg_backend_specific_rocm_selection() (
   printf '#!/usr/bin/env bash\nexit 0\n' >"${rocm642}/bin/hipcc"
   : >"${rocm642}/include/rccl/rccl.h"
   : >"${rocm642}/lib/librccl.so"
+  : >"${rocm642}/lib/libamdhip64.so"
   chmod +x "${bin_dir}/CC" "${rocm624}/bin/hipcc" "${rocm642}/bin/hipcc"
   export PATH="${bin_dir}:${PATH}"
   base_path="${PATH}"
@@ -409,9 +421,13 @@ test_borg_backend_specific_rocm_selection() (
   source "${ROOT}/scripts/systems/borg.sh"
 
   ghalo_system_setup_build mpi-hip
-  assert_eq rocm/6.2.4 "${GHALO_LOADED_ROCM_MODULE}" \
-    "Borg mpi-hip selects ROCm 6.2.4"
-  assert_eq "${rocm624}" "${ROCM_PATH}" "Borg mpi-hip ROCM_PATH"
+  assert_eq rocm/6.4.2 "${GHALO_LOADED_ROCM_MODULE}" \
+    "Borg mpi-hip selects ROCm 6.4.2"
+  assert_eq "${rocm642}" "${ROCM_PATH}" "Borg mpi-hip ROCM_PATH"
+  assert_eq "${rocm642}/bin/hipcc" "${GHALO_RESOLVED_HIP_COMPILER}" \
+    "Borg mpi-hip resolved hipcc"
+  assert_eq "${rocm642}/lib/libamdhip64.so" "${GHALO_RESOLVED_HIP_LIBRARY}" \
+    "Borg mpi-hip resolved libamdhip64"
   if [[ -n "${OLCF_OFI_NCCL_ROOT+x}" ]]; then
     printf 'Borg mpi-hip setup should not load rccl-net-plugin/1.0\n' >&2
     exit 1

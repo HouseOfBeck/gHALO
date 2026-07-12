@@ -145,11 +145,25 @@ ghalo_frontier_verify_rccl_rocm_consistency() {
 }
 
 ghalo_frontier_load_mpi_hip_gpu() {
+  local hip_compiler
+  local hip_library
   ghalo_frontier_load_gpu
   ghalo_frontier_unload_rocm_and_rccl
-  module load rocm/6.2.4 ||
-    ghalo_die "failed to load required Frontier ROCm module rocm/6.2.4"
-  export GHALO_LOADED_ROCM_MODULE=rocm/6.2.4
+  module load rocm/6.4.2 ||
+    ghalo_die "failed to load required Frontier ROCm module rocm/6.4.2"
+  export GHALO_LOADED_ROCM_MODULE=rocm/6.4.2
+  hip_compiler="$(command -v hipcc 2>/dev/null || true)"
+  [[ -n "${hip_compiler}" ]] ||
+    ghalo_die "Frontier MPI-HIP setup requires hipcc from rocm/6.4.2"
+  hip_compiler="$(readlink -f "${hip_compiler}" 2>/dev/null || printf '%s\n' "${hip_compiler}")"
+  ghalo_frontier_path_matches_rocm_version "${hip_compiler}" "6.4.2" ||
+    ghalo_die "Frontier MPI-HIP environment mismatch: hipcc='${hip_compiler}' does not match rocm/6.4.2"
+  hip_library="$(ghalo_frontier_resolve_hip_library "${ROCM_PATH}")" ||
+    ghalo_die "Frontier MPI-HIP setup could not find libamdhip64.so under ROCM_PATH='${ROCM_PATH}'"
+  ghalo_frontier_path_matches_rocm_version "${hip_library}" "6.4.2" ||
+    ghalo_die "Frontier MPI-HIP environment mismatch: libamdhip64='${hip_library}' does not match rocm/6.4.2"
+  export GHALO_RESOLVED_HIP_COMPILER="${hip_compiler}"
+  export GHALO_RESOLVED_HIP_LIBRARY="${hip_library}"
   unset RCCL_ROOT
   unset OLCF_OFI_NCCL_ROOT
   unset GHALO_RESOLVED_RCCL_LIBRARY

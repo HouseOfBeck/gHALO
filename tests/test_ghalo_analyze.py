@@ -87,6 +87,7 @@ def write_result_dir(
     timings=None,
     phase_timing=None,
     rccl_sync_mode: str = "",
+    rocm_version: str = "",
 ) -> Path:
     path = root / name
     path.mkdir(parents=True)
@@ -99,6 +100,8 @@ def write_result_dir(
         }
         if rccl_sync_mode:
             metadata["rccl_sync_mode"] = rccl_sync_mode
+        if rocm_version:
+            metadata["rocm_version"] = rocm_version
         if nodes_metadata is not None:
             metadata["nodes"] = nodes_metadata
         if ranks_per_node_metadata is not None:
@@ -451,6 +454,23 @@ class GhaloAnalyzeTests(unittest.TestCase):
         groups = {row["group_rccl_sync_mode"] for row in rows}
         self.assertEqual(groups, {"conservative", "stream-ordered"})
         self.assertEqual(len({row["group"] for row in rows}), 2)
+
+    def test_rocm_version_is_compatibility_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            old_rocm = analyze.load_run(
+                str(write_result_dir(root, "mpi-hip-624", rocm_version="rocm/6.2.4"))
+            )
+            new_rocm = analyze.load_run(
+                str(write_result_dir(root, "mpi-hip-642", rocm_version="rocm/6.4.2"))
+            )
+        with self.assertRaises(analyze.AnalysisError):
+            analyze.aggregate_rows([old_rocm, new_rocm], allow_mixed=False, group_by=[])
+        rows = analyze.aggregate_rows(
+            [old_rocm, new_rocm], allow_mixed=True, group_by=["backend"]
+        )
+        self.assertEqual({row["group_rocm_version"] for row in rows},
+                         {"rocm/6.2.4", "rocm/6.4.2"})
 
     def test_concise_labels_and_borg_active_system(self) -> None:
         frontier = analyze.load_run(str(DATA / "repeat_a"))

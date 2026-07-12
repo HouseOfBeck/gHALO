@@ -86,6 +86,17 @@ two-dimensional halo exchange with correctness-first stream synchronization.
 It implements diagnostic RCCL phase timing, but does not yet claim
 synchronization optimization or production performance comparisons.
 
+Frontier and Borg GPU backends default to ROCm 6.4.2:
+
+- `mpi-hip`: loads `rocm/6.4.2`, sets `MPICH_GPU_SUPPORT_ENABLED=1`, and does
+  not load `rccl-net-plugin/1.0`.
+- `rccl`: loads `rocm/6.4.2`, loads `rccl-net-plugin/1.0`, and sets
+  `RCCL_ROOT="$ROCM_PATH"`.
+
+Older MPI-HIP result sets collected with ROCm 6.2.4 remain valid historical
+measurements, but they are a different software configuration from new ROCm
+6.4.2 runs.
+
 The default synchronization mode is:
 
 ```sh
@@ -583,16 +594,19 @@ GHALO_SYSTEM_NAME=borg scripts/run.sh \
   --label mpi-hip-reference
 ```
 
-Treat these as bring-up comparisons only. RCCL and MPI-HIP may use different
-ROCm module versions, placement effects can dominate small messages, and
-multiple repeats are required before drawing performance conclusions.
+Treat these as bring-up comparisons only. Current RCCL and MPI-HIP workflows
+both use ROCm 6.4.2 by default, but placement effects can dominate small
+messages and multiple repeats are required before drawing performance
+conclusions. Historical MPI-HIP baselines collected with ROCm 6.2.4 should be
+kept separate in analysis.
 
 The Borg profile:
 
 - uses the Cray C++ wrapper `CC`;
 - uses `srun` with `-N`, `-n`, and `--ntasks-per-node` when supplied;
 - uses `gfx90a` for HIP builds;
-- loads `craype-accel-amd-gfx90a` and `rocm/6.2.4` for `mpi-hip`;
+- loads `craype-accel-amd-gfx90a` and `rocm/6.4.2` for `mpi-hip`;
+- loads `rccl-net-plugin/1.0` only for `rccl`;
 - sets `MPICH_GPU_SUPPORT_ENABLED=1` only for `mpi-hip`;
 - unsets `MPICH_GPU_SUPPORT_ENABLED` for CPU MPI;
 - avoids unvalidated GPU-binding options;
