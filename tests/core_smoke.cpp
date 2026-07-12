@@ -9,6 +9,7 @@
 
 #include <cassert>
 #include <chrono>
+#include <cstdlib>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -281,6 +282,27 @@ std::string read_file(const std::filesystem::path& path) {
           std::istreambuf_iterator<char>()};
 }
 
+std::string shell_single_quote(const std::string& value) {
+  std::string quoted = "'";
+  for (const char c : value) {
+    if (c == '\'') {
+      quoted += "'\\''";
+    } else {
+      quoted += c;
+    }
+  }
+  quoted += "'";
+  return quoted;
+}
+
+void assert_python_json_loads(const std::filesystem::path& path) {
+  const std::string command =
+      "python3 -c 'import json, sys; json.load(open(sys.argv[1], "
+      "encoding=\"utf-8\"))' " +
+      shell_single_quote(path.string());
+  assert(std::system(command.c_str()) == 0);
+}
+
 ghalo::BenchmarkResult sample_result() {
   ghalo::BenchmarkResult result;
   result.backend = "MockBackend";
@@ -435,6 +457,51 @@ void test_output_without_phase_timing_is_unchanged() {
   ghalo::write_json(json_path.string(), results);
   const std::string json = read_file(json_path);
   assert(json.find("\"phase_timing\"") == std::string::npos);
+}
+
+void test_json_string_escaping_is_strict() {
+  auto result = sample_result();
+  result.backend = "Mock\"Backend";
+  result.algorithm = "mock\\algorithm";
+  result.metadata.memory_location = "device\nmemory";
+  result.metadata.mpi_library_version =
+      "Open MPI\nrelease\t\"quoted\"\\path\rnext";
+  result.metadata.hip_runtime_version = "hip\bversion";
+  result.metadata.rccl_version = "rccl\fversion";
+  result.metadata.rocm_version = std::string("6.4.2") + char(0x01);
+  result.metadata.rccl_stage = "full";
+  result.metadata.rccl_sync_mode = "stream-ordered";
+  result.metadata.rccl_plugin_root = "/opt/rccl\\plugin";
+  result.metadata.synchronization_model = "sync\nmodel";
+  result.metadata.transport_provider = "ofi\tprovider";
+  result.metadata.device_map = "local-rank";
+  result.metadata.phase_timing_enabled = true;
+  result.metadata.phase_timing_source = "MPI_Wtime\nclock";
+  result.metadata.phase_timing_aggregation = "max\taverage";
+  result.metadata.phase_timing_active_phases = "north\"south";
+  ghalo::RankMetadata rank;
+  rank.world_rank = 0;
+  rank.local_rank = 0;
+  rank.cart_rank = 0;
+  rank.hostname = "host\nname";
+  rank.hip_device_index = 0;
+  rank.hip_device_name = "GPU\t\"name\"";
+  rank.rocr_visible_devices = "0\r1\\2";
+  result.metadata.ranks.push_back(rank);
+
+  ScopedTempDirectory temp;
+  const auto json_path = temp.file("ghalo_core_smoke_escaped.json");
+  ghalo::write_json(json_path.string(), {result});
+  const std::string json = read_file(json_path);
+  assert(json.find("\\n") != std::string::npos);
+  assert(json.find("\\t") != std::string::npos);
+  assert(json.find("\\r") != std::string::npos);
+  assert(json.find("\\\\") != std::string::npos);
+  assert(json.find("\\\"") != std::string::npos);
+  assert(json.find("\\b") != std::string::npos);
+  assert(json.find("\\f") != std::string::npos);
+  assert(json.find("\\u0001") != std::string::npos);
+  assert_python_json_loads(json_path);
 }
 
 void test_output_with_phase_timing() {
@@ -595,6 +662,7 @@ int main() {
   test_cli_phase_timing_parse();
   test_development_validation_refusal();
   test_output_without_phase_timing_is_unchanged();
+  test_json_string_escaping_is_strict();
   test_output_with_phase_timing();
   test_output_with_rccl_phase_timing();
   test_output_with_rccl_stream_ordered_phase_timing();

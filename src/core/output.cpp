@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <ostream>
 #include <stdexcept>
+#include <string>
 
 namespace ghalo {
 namespace {
@@ -18,7 +19,7 @@ void require_stream(const std::ofstream& stream, const std::string& path) {
 
 void write_json_string(std::ostream& out, const std::string& value) {
   out << '"';
-  for (const char c : value) {
+  for (const unsigned char c : value) {
     switch (c) {
     case '\\':
       out << "\\\\";
@@ -35,8 +36,23 @@ void write_json_string(std::ostream& out, const std::string& value) {
     case '\t':
       out << "\\t";
       break;
+    case '\b':
+      out << "\\b";
+      break;
+    case '\f':
+      out << "\\f";
+      break;
     default:
-      out << c;
+      if (c < 0x20) {
+        const auto flags = out.flags();
+        const auto fill = out.fill();
+        out << "\\u" << std::hex << std::uppercase << std::setw(4)
+            << std::setfill('0') << static_cast<int>(c);
+        out.flags(flags);
+        out.fill(fill);
+      } else {
+        out << static_cast<char>(c);
+      }
       break;
     }
   }
