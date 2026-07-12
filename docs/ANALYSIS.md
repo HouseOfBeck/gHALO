@@ -14,6 +14,7 @@ SciPy, seaborn, Jupyter, ROCm, MPI, or GPU runtime is required for analysis.
 The analyzer accepts:
 
 - a result directory containing `ghalo.json` or `ghalo.csv`;
+- a parent `results/<system>/` tree containing nested result bundles;
 - an explicit `ghalo.json` file;
 - an explicit `ghalo.csv` file;
 - multiple shell-expanded result paths such as `results/frontier/*mpi-hip*`.
@@ -22,6 +23,21 @@ Use `results/` as the source of analyzable benchmark artifacts. Harness
 diagnostics under `test-logs/`, such as build logs, `ldd` output, shell-test
 logs, and standalone transport smoke-test output, are not scanned by
 `ghalo_analyze.py`.
+
+Current runs are written under:
+
+```text
+results/<system>/rocm-<version>/<category>/<timestamp>_<backend>_<label>/
+```
+
+Older flat bundles under `results/<system>/<timestamp>_<backend>_<label>/`
+remain valid inputs. To copy them into the versioned hierarchy without deleting
+the originals:
+
+```sh
+python3 tools/migrate_results.py --dry-run results/frontier
+python3 tools/migrate_results.py --apply results/frontier
+```
 
 When both `ghalo.json` and `ghalo.csv` exist in a directory, `ghalo.json` is
 preferred because it preserves nested topology, rank mapping, metadata, and

@@ -107,6 +107,7 @@ jobs:
             --json build/mpi-smoke/ghalo.json
           test -s build/mpi-smoke/ghalo.csv
           test -s build/mpi-smoke/ghalo.json
+          python3 -c 'import json, sys; data=json.load(open(sys.argv[1], encoding="utf-8")); assert isinstance(data.get("results"), list) and data["results"]' build/mpi-smoke/ghalo.json
 
       - name: Upload MPI CTest log
         if: failure()
@@ -137,7 +138,7 @@ jobs:
           shellcheck --version
 
       - name: Run shell syntax checks
-        run: bash -n scripts/*.sh scripts/systems/*.sh tests/*.sh
+        run: bash -n run_loop.sh scripts/*.sh scripts/systems/*.sh tests/*.sh
 
       - name: Run ShellCheck
-        run: shellcheck -x scripts/*.sh scripts/systems/*.sh tests/*.sh
+        run: shellcheck -x run_loop.sh scripts/*.sh scripts/systems/*.sh tests/*.sh

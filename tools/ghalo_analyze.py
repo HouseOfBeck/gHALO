@@ -724,7 +724,30 @@ def summary_rows(
 def load_runs(paths: Sequence[str]) -> List[Run]:
     if not paths:
         raise AnalysisError("at least one input path is required")
-    return [load_run(path) for path in paths]
+    expanded: List[str] = []
+    for path_text in paths:
+        path = Path(path_text)
+        if (
+            path.is_dir()
+            and not (path / "ghalo.json").exists()
+            and not (path / "ghalo.csv").exists()
+        ):
+            bundles = sorted(
+                candidate.parent
+                for candidate in path.rglob("ghalo.json")
+                if candidate.is_file()
+            )
+            if not bundles:
+                bundles = sorted(
+                    candidate.parent
+                    for candidate in path.rglob("ghalo.csv")
+                    if candidate.is_file()
+                )
+            if bundles:
+                expanded.extend(str(bundle) for bundle in bundles)
+                continue
+        expanded.append(path_text)
+    return [load_run(path) for path in expanded]
 
 
 def write_output(rows_or_payload: Any, fmt: str, output: Optional[str]) -> None:

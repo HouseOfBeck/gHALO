@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <stdexcept>
 
 namespace ghalo {
@@ -18,6 +19,44 @@ double time_exchanges(Backend& backend, int iterations) {
 
 } // namespace
 
+std::vector<std::size_t> generate_halo_lengths(std::size_t min_halo,
+                                               std::size_t max_halo,
+                                               std::size_t multiplier) {
+  if (min_halo == 0) {
+    throw std::invalid_argument("min_halo must be positive");
+  }
+  if (max_halo == 0) {
+    throw std::invalid_argument("max_halo must be positive");
+  }
+  if (multiplier <= 1) {
+    throw std::invalid_argument("halo_multiplier must be greater than 1");
+  }
+  if (max_halo < min_halo) {
+    throw std::invalid_argument(
+        "max_halo must be greater than or equal to min_halo");
+  }
+
+  std::vector<std::size_t> lengths;
+  for (std::size_t halo = min_halo; halo <= max_halo;) {
+    lengths.push_back(halo);
+    if (halo > std::numeric_limits<std::size_t>::max() / multiplier) {
+      if (halo != max_halo) {
+        throw std::invalid_argument("halo range overflows size_t");
+      }
+      break;
+    }
+    const std::size_t next = halo * multiplier;
+    if (next <= halo) {
+      throw std::invalid_argument("halo range does not progress");
+    }
+    if (next > max_halo) {
+      break;
+    }
+    halo = next;
+  }
+  return lengths;
+}
+
 std::vector<BenchmarkResult> run_benchmark(Backend& backend,
                                            const BenchmarkConfig& config) {
   if (config.target_seconds <= 0.0) {
@@ -27,10 +66,16 @@ std::vector<BenchmarkResult> run_benchmark(Backend& backend,
     throw std::invalid_argument("calibration_iterations must be positive");
   }
 
-  std::vector<BenchmarkResult> results;
-  results.reserve(config.halo_lengths.size());
+  const std::vector<std::size_t> halo_lengths =
+      config.halo_lengths.empty()
+          ? generate_halo_lengths(config.min_halo, config.max_halo,
+                                  config.halo_multiplier)
+          : config.halo_lengths;
 
-  for (const std::size_t halo_words : config.halo_lengths) {
+  std::vector<BenchmarkResult> results;
+  results.reserve(halo_lengths.size());
+
+  for (const std::size_t halo_words : halo_lengths) {
     backend.setup(halo_words);
 
     // One unmeasured exchange preserves the original HALO steady-state method:

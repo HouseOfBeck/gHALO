@@ -17,6 +17,7 @@
 #include <string>
 #include <stdexcept>
 #include <system_error>
+#include <vector>
 
 namespace {
 
@@ -163,6 +164,56 @@ void test_bytes_per_rank_consistency() {
   assert(total_exchange_bytes_per_rank == 24576);
 }
 
+void test_halo_length_generation() {
+  const auto defaults = ghalo::generate_halo_lengths(2, 1024, 2);
+  const std::vector<std::size_t> expected_defaults{2,   4,   8,   16, 32,
+                                                   64,  128, 256, 512,
+                                                   1024};
+  assert(defaults == expected_defaults);
+
+  const auto extended = ghalo::generate_halo_lengths(2, 262144, 2);
+  assert(extended.front() == 2);
+  assert(extended.back() == 262144);
+
+  bool threw = false;
+  try {
+    (void)ghalo::generate_halo_lengths(0, 1024, 2);
+  } catch (const std::invalid_argument&) {
+    threw = true;
+  }
+  assert(threw);
+
+  threw = false;
+  try {
+    (void)ghalo::generate_halo_lengths(8, 4, 2);
+  } catch (const std::invalid_argument&) {
+    threw = true;
+  }
+  assert(threw);
+
+  threw = false;
+  try {
+    (void)ghalo::generate_halo_lengths(2, 1024, 1);
+  } catch (const std::invalid_argument&) {
+    threw = true;
+  }
+  assert(threw);
+}
+
+void test_benchmark_uses_configured_halo_lengths() {
+  MockBackend backend;
+  ghalo::BenchmarkConfig config;
+  config.target_seconds = 0.01;
+  config.min_halo = 2;
+  config.max_halo = 8;
+  config.halo_multiplier = 2;
+  const auto results = ghalo::run_benchmark(backend, config);
+  assert(results.size() == 3);
+  assert(results[0].halo_words == 2);
+  assert(results[1].halo_words == 4);
+  assert(results[2].halo_words == 8);
+}
+
 void test_north_south_stage_b_conceptual_plans() {
   check_north_south_plan(topology_for(1, 1, 0));
 
@@ -304,6 +355,15 @@ void test_cli_phase_timing_parse() {
   assert(rccl_stream_options.backend == "rccl");
   assert(rccl_stream_options.rccl_sync_mode == "stream-ordered");
 
+  const char* halo_argv_storage[] = {"ghalo", "--min-halo", "4",
+                                     "--max-halo", "262144",
+                                     "--halo-multiplier", "4"};
+  auto* halo_argv = const_cast<char**>(halo_argv_storage);
+  const auto halo_options = ghalo::parse_cli_options(7, halo_argv);
+  assert(halo_options.min_halo == 4);
+  assert(halo_options.max_halo == 262144);
+  assert(halo_options.halo_multiplier == 4);
+
   const char* rccl_stage_argv_storage[] = {"ghalo", "--backend", "rccl",
                                            "--rccl-stage-b"};
   auto* rccl_stage_argv = const_cast<char**>(rccl_stage_argv_storage);
@@ -322,6 +382,17 @@ void test_cli_phase_timing_parse() {
     bad_sync_threw = true;
   }
   assert(bad_sync_threw);
+
+  const char* bad_halo_argv_storage[] = {"ghalo", "--min-halo", "8",
+                                         "--max-halo", "4"};
+  auto* bad_halo_argv = const_cast<char**>(bad_halo_argv_storage);
+  bool bad_halo_threw = false;
+  try {
+    (void)ghalo::parse_cli_options(5, bad_halo_argv);
+  } catch (const std::invalid_argument&) {
+    bad_halo_threw = true;
+  }
+  assert(bad_halo_threw);
 
   const char* bad_argv_storage[] = {"ghalo", "--phase-timing", "--csv"};
   auto* bad_argv = const_cast<char**>(bad_argv_storage);
@@ -517,6 +588,8 @@ int main() {
   test_north_south_stage_b_conceptual_plans();
   test_full_halo_corner_expectations();
   test_bytes_per_rank_consistency();
+  test_halo_length_generation();
+  test_benchmark_uses_configured_halo_lengths();
   test_phase_sum_calculation();
   test_unsupported_phase_timing();
   test_cli_phase_timing_parse();

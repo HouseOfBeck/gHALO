@@ -27,6 +27,7 @@ ghalo_borg_load_gpu() {
   module load rocm/6.4.2 ||
     ghalo_die "failed to load required Borg ROCm module rocm/6.4.2"
   export GHALO_LOADED_ROCM_MODULE=rocm/6.4.2
+  export GHALO_ROCM_VERSION=6.4.2
   hip_compiler="$(command -v hipcc 2>/dev/null || true)"
   [[ -n "${hip_compiler}" ]] ||
     ghalo_die "Borg MPI-HIP setup requires hipcc from rocm/6.4.2"
@@ -133,6 +134,7 @@ ghalo_borg_verify_rccl_rocm_consistency() {
     ghalo_die "Borg RCCL mixed ROCm configuration: RCCL library='${rccl_library}' does not match rocm/${version}"
 
   export GHALO_LOADED_ROCM_MODULE=rocm/${version}
+  export GHALO_ROCM_VERSION="${version}"
   export GHALO_RESOLVED_HIP_COMPILER="${hip_compiler}"
   export GHALO_RESOLVED_RCCL_LIBRARY="${rccl_library}"
 }

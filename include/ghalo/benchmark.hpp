@@ -9,8 +9,10 @@
 namespace ghalo {
 
 struct BenchmarkConfig {
-  std::vector<std::size_t> halo_lengths{2, 4, 8, 16, 32, 64,
-                                        128, 256, 512, 1024};
+  std::size_t min_halo = 2;
+  std::size_t max_halo = 1024;
+  std::size_t halo_multiplier = 2;
+  std::vector<std::size_t> halo_lengths{};
   double target_seconds = 3.0;
   int calibration_iterations = 5;
 };
@@ -33,5 +35,8 @@ struct BenchmarkResult {
 
 std::vector<BenchmarkResult> run_benchmark(Backend& backend,
                                            const BenchmarkConfig& config);
+std::vector<std::size_t> generate_halo_lengths(std::size_t min_halo,
+                                               std::size_t max_halo,
+                                               std::size_t multiplier);
 
 } // namespace ghalo

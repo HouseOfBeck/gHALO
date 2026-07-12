@@ -83,6 +83,35 @@ std::string getenv_string(const char* name) {
   return value == nullptr ? std::string{} : std::string(value);
 }
 
+std::string normalized_rocm_version() {
+  const auto trim_path_suffix = [](std::string version) {
+    const std::size_t slash = version.find('/');
+    if (slash != std::string::npos) {
+      version.erase(slash);
+    }
+    return version;
+  };
+  const std::string explicit_version = getenv_string("GHALO_ROCM_VERSION");
+  if (!explicit_version.empty()) {
+    return explicit_version;
+  }
+  const std::array<std::string, 2> values = {
+      getenv_string("GHALO_LOADED_ROCM_MODULE"), getenv_string("ROCM_PATH")};
+  for (const auto& value : values) {
+    const std::string prefix = "rocm/";
+    const std::string path_prefix = "rocm-";
+    const std::size_t module_pos = value.find(prefix);
+    if (module_pos != std::string::npos) {
+      return trim_path_suffix(value.substr(module_pos + prefix.size()));
+    }
+    const std::size_t path_pos = value.find(path_prefix);
+    if (path_pos != std::string::npos) {
+      return trim_path_suffix(value.substr(path_pos + path_prefix.size()));
+    }
+  }
+  return {};
+}
+
 std::vector<std::string> split_visible_devices(const std::string& value) {
   std::vector<std::string> tokens;
   std::stringstream stream(value);
@@ -612,6 +641,7 @@ void MPIHIPBackend::initialize_metadata() {
   metadata_.validation_enabled = validate_;
   metadata_.validation_passed = !validate_;
   metadata_.hip_runtime_version = hip_runtime_version();
+  metadata_.rocm_version = normalized_rocm_version();
 
   int version_length = 0;
   char version[MPI_MAX_LIBRARY_VERSION_STRING] = {};

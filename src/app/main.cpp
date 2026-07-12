@@ -64,12 +64,16 @@ int main(int argc, char** argv) {
 
     ghalo::BenchmarkConfig config;
     config.target_seconds = options.target_seconds;
+    config.min_halo = options.min_halo;
+    config.max_halo = options.max_halo;
+    config.halo_multiplier = options.halo_multiplier;
 
     if (options.rccl_stage_b) {
       if (options.backend != "rccl") {
         throw std::runtime_error("--rccl-stage-b requires --backend rccl");
       }
-      backend->run_development_validation(config.halo_lengths);
+      backend->run_development_validation(ghalo::generate_halo_lengths(
+          config.min_halo, config.max_halo, config.halo_multiplier));
       return 0;
     }
 

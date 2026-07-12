@@ -17,13 +17,19 @@ builds/
     rccl/
 ```
 
-Results are stored by system and timestamp:
+Results are stored by system, ROCm version, category, and timestamp:
 
 ```text
 results/
   <system-name>/
-    <timestamp>_<backend>_<label>/
+    rocm-<version>/
+      <category>/
+        <timestamp>_<backend>_<label>/
 ```
+
+GPU runs normalize the ROCm version as values such as `rocm-6.4.2`. CPU-only
+runs use `rocm-none`. Supported categories are `validation`, `scaling`,
+`repeatability`, and `phase-timing`.
 
 The scripts determine `<system-name>` in this order:
 
@@ -168,10 +174,14 @@ Supported options:
 --ranks <N>
 --ranks-per-node <N>
 --target-seconds <seconds>
+--min-halo <N>
+--max-halo <N>
+--halo-multiplier <N>
 --validate
 --phase-timing
 --rccl-stage-b
 --rccl-sync-mode conservative|stream-ordered
+--category validation|scaling|repeatability|phase-timing
 --label <text>
 --extra-srun-args "<args>"
 ```
@@ -185,11 +195,14 @@ builds/<system>/<backend>/ghalo
 and writes each run to a unique directory:
 
 ```text
-results/<system>/<timestamp>_<backend>_<label>/
+results/<system>/rocm-<version>/<category>/<timestamp>_<backend>_<label>/
 ```
 
-The optional label is sanitized for safe filenames. The result directory is
-printed before launching the benchmark.
+The optional label is sanitized for safe filenames. If the label already begins
+with the backend name, that duplicate prefix is removed so names such as
+`rccl_rccl_conservative` are not produced. If a generated directory already
+exists, the workflow appends a numeric suffix rather than overwriting it. The
+result directory is printed before launching the benchmark.
 
 `results/` is the canonical location for benchmark artifacts intended for
 analysis. Regression harnesses such as `run_loop.sh` may keep combined logs,
@@ -210,6 +223,7 @@ ghalo.json
 git.txt
 hostname.txt
 modules.txt
+result-metadata.txt
 slurm-job.txt
 stderr.txt
 stdout.txt
@@ -220,6 +234,37 @@ system-resolution.txt
 The current gHALO CLI supports `--csv` and `--json`, so the workflow writes
 structured output directly into the result directory. The script launches the
 benchmark without pipelines and returns the benchmark exit status.
+
+The default halo sweep remains `2, 4, ..., 1024`. Short validation runs can keep
+the default sweep while reducing timing duration:
+
+```sh
+GHALO_SYSTEM_NAME=frontier scripts/run.sh \
+  --backend mpi-hip \
+  --nodes 1 \
+  --ranks 8 \
+  --ranks-per-node 8 \
+  --target-seconds 0.1 \
+  --validate \
+  --category validation \
+  --label validation-1node
+```
+
+Extended sweeps do not require source edits:
+
+```sh
+GHALO_SYSTEM_NAME=frontier scripts/run.sh \
+  --backend rccl \
+  --nodes 64 \
+  --ranks 512 \
+  --ranks-per-node 8 \
+  --min-halo 2 \
+  --max-halo 262144 \
+  --halo-multiplier 2 \
+  --target-seconds 3 \
+  --category scaling \
+  --label 64node-extended
+```
 
 For RCCL full correctness validation:
 
@@ -361,10 +406,14 @@ Supported submission options include:
 --ranks-per-node <N>
 --time <HH:MM:SS>
 --target-seconds <seconds>
+--min-halo <N>
+--max-halo <N>
+--halo-multiplier <N>
 --validate
 --phase-timing
 --rccl-stage-b
 --rccl-sync-mode conservative|stream-ordered
+--category validation|scaling|repeatability|phase-timing
 --label <text>
 --job-name <name>
 --constraint <constraint>
@@ -651,3 +700,20 @@ The exception allows future curated reference results to be tracked under
 `rccl` is accepted by the workflow for experimental full-exchange correctness
 runs. Treat timing results as bring-up data until RCCL synchronization policy
 and performance behavior have been studied.
+
+## Migrating Flat Results
+
+Older gHALO runs used the flat layout
+`results/<system>/<timestamp>_<backend>_<label>/`. They remain analyzable, but
+they can be copied into the versioned hierarchy with:
+
+```sh
+python3 tools/migrate_results.py --dry-run results/frontier
+python3 tools/migrate_results.py --apply results/frontier
+```
+
+The helper infers system, ROCm version, category, backend, and label from
+available metadata and falls back conservatively when metadata is missing. It
+copies bundles into the new tree, avoids destination collisions, removes
+duplicated backend prefixes in destination names, and never deletes the source
+directories automatically.

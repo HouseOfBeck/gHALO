@@ -139,6 +139,7 @@ ghalo_frontier_verify_rccl_rocm_consistency() {
   librccl=${rccl_library}"
 
   export GHALO_LOADED_ROCM_MODULE=rocm/${version}
+  export GHALO_ROCM_VERSION="${version}"
   export GHALO_RESOLVED_HIP_COMPILER="${hip_compiler}"
   export GHALO_RESOLVED_HIP_LIBRARY="${hip_library}"
   export GHALO_RESOLVED_RCCL_LIBRARY="${rccl_library}"
@@ -152,6 +153,7 @@ ghalo_frontier_load_mpi_hip_gpu() {
   module load rocm/6.4.2 ||
     ghalo_die "failed to load required Frontier ROCm module rocm/6.4.2"
   export GHALO_LOADED_ROCM_MODULE=rocm/6.4.2
+  export GHALO_ROCM_VERSION=6.4.2
   hip_compiler="$(command -v hipcc 2>/dev/null || true)"
   [[ -n "${hip_compiler}" ]] ||
     ghalo_die "Frontier MPI-HIP setup requires hipcc from rocm/6.4.2"

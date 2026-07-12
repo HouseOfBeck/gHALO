@@ -19,10 +19,14 @@ Options:
   --ranks N                  Total MPI ranks. Default: 1.
   --ranks-per-node N         MPI ranks per node.
   --target-seconds SECONDS   gHALO target seconds per halo size. Default: 3.
+  --min-halo N               Minimum halo length. Default: 2.
+  --max-halo N               Maximum halo length. Default: 1024.
+  --halo-multiplier N        Halo length multiplier. Default: 2.
   --validate                 Pass --validate to gHALO.
   --phase-timing             Pass --phase-timing to gHALO.
   --rccl-stage-b             Run RCCL north/south Stage B validation only.
   --rccl-sync-mode MODE      Pass conservative or stream-ordered to RCCL.
+  --category NAME            Result category: validation, scaling, repeatability, or phase-timing.
   --label TEXT               Optional result directory label.
   --extra-srun-args ARGS     Extra launcher arguments for systems that use srun.
   -h, --help                 Show this help.
@@ -36,10 +40,14 @@ nodes="1"
 ranks="1"
 ranks_per_node=""
 target_seconds="3"
+min_halo="2"
+max_halo="1024"
+halo_multiplier="2"
 validate=false
 phase_timing=false
 rccl_stage_b=false
 rccl_sync_mode=""
+category=""
 label="run"
 extra_srun_args=""
 
@@ -75,6 +83,21 @@ while [[ $# -gt 0 ]]; do
       target_seconds="$2"
       shift 2
       ;;
+    --min-halo)
+      [[ $# -ge 2 ]] || ghalo_die "--min-halo requires a value"
+      min_halo="$2"
+      shift 2
+      ;;
+    --max-halo)
+      [[ $# -ge 2 ]] || ghalo_die "--max-halo requires a value"
+      max_halo="$2"
+      shift 2
+      ;;
+    --halo-multiplier)
+      [[ $# -ge 2 ]] || ghalo_die "--halo-multiplier requires a value"
+      halo_multiplier="$2"
+      shift 2
+      ;;
     --validate)
       validate=true
       shift
@@ -94,6 +117,12 @@ while [[ $# -gt 0 ]]; do
         conservative | stream-ordered) ;;
         *) ghalo_die "--rccl-sync-mode must be conservative or stream-ordered" ;;
       esac
+      shift 2
+      ;;
+    --category)
+      [[ $# -ge 2 ]] || ghalo_die "--category requires a value"
+      category="$2"
+      ghalo_validate_result_category "${category}"
       shift 2
       ;;
     --label)
@@ -128,6 +157,16 @@ if [[ -n "${ranks_per_node}" &&
       ( ! "${ranks_per_node}" =~ ^[0-9]+$ || "${ranks_per_node}" -lt 1 ) ]]; then
   ghalo_die "--ranks-per-node must be a positive integer"
 fi
+for value_name in min_halo max_halo halo_multiplier; do
+  value="${!value_name}"
+  if [[ ! "${value}" =~ ^[0-9]+$ || "${value}" -lt 1 ]]; then
+    ghalo_die "--${value_name//_/-} must be a positive integer"
+  fi
+done
+[[ "${halo_multiplier}" -gt 1 ]] ||
+  ghalo_die "--halo-multiplier must be greater than 1"
+[[ "${max_halo}" -ge "${min_halo}" ]] ||
+  ghalo_die "--max-halo must be greater than or equal to --min-halo"
 
 system="$(ghalo_resolve_system "${requested_system}")"
 ghalo_validate_system_name "${system}"
@@ -156,13 +195,17 @@ fi
 ghalo_system_setup_run "${backend}"
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-safe_label="$(ghalo_sanitize_label "${label}")"
-result_dir="${root}/results/${system}/${timestamp}_${backend}_${safe_label}"
+rocm_version="$(ghalo_normalize_rocm_version)"
+category="$(ghalo_infer_result_category "${category}" "${validate}" "${phase_timing}" "${label}")"
+result_dir="$(ghalo_unique_result_dir "${root}" "${system}" "${rocm_version}" "${category}" "${timestamp}" "${backend}" "${label}")"
 mkdir -p "${result_dir}"
 
 ghalo_args=(
   --backend "${backend}"
   --target-seconds "${target_seconds}"
+  --min-halo "${min_halo}"
+  --max-halo "${max_halo}"
+  --halo-multiplier "${halo_multiplier}"
   --csv "${result_dir}/ghalo.csv"
   --json "${result_dir}/ghalo.json"
 )
@@ -196,6 +239,12 @@ printf '%q ' "${launch_command[@]}" >"${result_dir}/command.txt"
 printf '\n' >>"${result_dir}/command.txt"
 ghalo_write_system_resolution "${result_dir}/system-resolution.txt" \
   "${system}" "${build_system}" "${backend}" "${binary}"
+{
+  printf 'result_layout=versioned\n'
+  printf 'result_category=%s\n' "${category}"
+  printf 'rocm_version=%s\n' "${rocm_version}"
+  printf 'loaded_rocm_module=%s\n' "${GHALO_LOADED_ROCM_MODULE:-}"
+} >"${result_dir}/result-metadata.txt"
 if [[ -n "${GHALO_SUBMIT_COMMAND:-}" || -n "${SLURM_JOB_ID:-}" ]]; then
   {
     printf 'slurm_job_id=%s\n' "${SLURM_JOB_ID:-}"

@@ -4,13 +4,13 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/batch-job.sh REPO_ROOT SYSTEM BACKEND ACCOUNT PARTITION NODES RANKS RANKS_PER_NODE TARGET_SECONDS VALIDATE PHASE_TIMING RCCL_STAGE_B RCCL_SYNC_MODE LABEL EXTRA_SRUN_ARGS SUBMIT_COMMAND BATCH_STDOUT BATCH_STDERR
+Usage: scripts/batch-job.sh REPO_ROOT SYSTEM BACKEND ACCOUNT PARTITION NODES RANKS RANKS_PER_NODE TARGET_SECONDS MIN_HALO MAX_HALO HALO_MULTIPLIER VALIDATE PHASE_TIMING RCCL_STAGE_B RCCL_SYNC_MODE CATEGORY LABEL EXTRA_SRUN_ARGS SUBMIT_COMMAND BATCH_STDOUT BATCH_STDERR
 EOF
 }
 
 [[ -n "${SLURM_JOB_ID:-}" ]] ||
   { echo "gHALO batch-job error: SLURM_JOB_ID is not set; this script must run inside a Slurm job" >&2; exit 1; }
-[[ $# -eq 18 ]] || { usage >&2; exit 2; }
+[[ $# -eq 22 ]] || { usage >&2; exit 2; }
 
 repo_root="$1"
 system="$2"
@@ -21,15 +21,19 @@ nodes="$6"
 ranks="$7"
 ranks_per_node="$8"
 target_seconds="$9"
-validate="${10}"
-phase_timing="${11}"
-rccl_stage_b="${12}"
-rccl_sync_mode="${13}"
-label="${14}"
-extra_srun_args="${15}"
-submit_command="${16}"
-batch_stdout="${17}"
-batch_stderr="${18}"
+min_halo="${10}"
+max_halo="${11}"
+halo_multiplier="${12}"
+validate="${13}"
+phase_timing="${14}"
+rccl_stage_b="${15}"
+rccl_sync_mode="${16}"
+category="${17}"
+label="${18}"
+extra_srun_args="${19}"
+submit_command="${20}"
+batch_stdout="${21}"
+batch_stderr="${22}"
 
 [[ "${repo_root}" = /* ]] ||
   { echo "gHALO batch-job error: REPO_ROOT must be an absolute path: ${repo_root}" >&2; exit 2; }
@@ -73,6 +77,10 @@ gHALO batch job
   nodes: ${nodes}
   ranks: ${ranks}
   ranks_per_node: ${ranks_per_node}
+  min_halo: ${min_halo}
+  max_halo: ${max_halo}
+  halo_multiplier: ${halo_multiplier}
+  category: ${category}
   rccl_sync_mode: ${rccl_sync_mode}
   allocated_nodes: ${SLURM_JOB_NODELIST:-}
   git_commit: ${git_commit}
@@ -86,6 +94,9 @@ run_args=(
   --ranks "${ranks}"
   --ranks-per-node "${ranks_per_node}"
   --target-seconds "${target_seconds}"
+  --min-halo "${min_halo}"
+  --max-halo "${max_halo}"
+  --halo-multiplier "${halo_multiplier}"
   --label "${label}"
 )
 
@@ -100,6 +111,9 @@ if [[ "${rccl_stage_b}" == "1" ]]; then
 fi
 if [[ -n "${rccl_sync_mode}" ]]; then
   run_args+=(--rccl-sync-mode "${rccl_sync_mode}")
+fi
+if [[ -n "${category}" ]]; then
+  run_args+=(--category "${category}")
 fi
 if [[ -n "${extra_srun_args}" ]]; then
   run_args+=(--extra-srun-args "${extra_srun_args}")

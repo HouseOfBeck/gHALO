@@ -22,10 +22,14 @@ Options:
   --ranks-per-node N            MPI ranks per node.
   --time HH:MM:SS               Slurm wall-clock limit.
   --target-seconds SECONDS      gHALO target seconds per halo size. Default: 3.
+  --min-halo N                  Minimum halo length. Default: 2.
+  --max-halo N                  Maximum halo length. Default: 1024.
+  --halo-multiplier N           Halo length multiplier. Default: 2.
   --validate                    Pass --validate to gHALO.
   --phase-timing                Pass --phase-timing to gHALO.
   --rccl-stage-b                Run RCCL north/south Stage B validation only.
   --rccl-sync-mode MODE         Pass conservative or stream-ordered to RCCL.
+  --category NAME               Result category: validation, scaling, repeatability, or phase-timing.
   --label TEXT                  Optional result label.
   --job-name NAME               Slurm job name.
   --constraint CONSTRAINT       Slurm constraint.
@@ -66,10 +70,14 @@ ranks=""
 ranks_per_node=""
 wall_time=""
 target_seconds="3"
+min_halo="2"
+max_halo="1024"
+halo_multiplier="2"
 validate=0
 phase_timing=0
 rccl_stage_b=0
 rccl_sync_mode=""
+category=""
 label="run"
 job_name=""
 constraint=""
@@ -131,6 +139,21 @@ while [[ $# -gt 0 ]]; do
       target_seconds="$2"
       shift 2
       ;;
+    --min-halo)
+      [[ $# -ge 2 ]] || ghalo_die "--min-halo requires a value"
+      min_halo="$2"
+      shift 2
+      ;;
+    --max-halo)
+      [[ $# -ge 2 ]] || ghalo_die "--max-halo requires a value"
+      max_halo="$2"
+      shift 2
+      ;;
+    --halo-multiplier)
+      [[ $# -ge 2 ]] || ghalo_die "--halo-multiplier requires a value"
+      halo_multiplier="$2"
+      shift 2
+      ;;
     --validate)
       validate=1
       shift
@@ -150,6 +173,12 @@ while [[ $# -gt 0 ]]; do
         conservative | stream-ordered) ;;
         *) ghalo_die "--rccl-sync-mode must be conservative or stream-ordered" ;;
       esac
+      shift 2
+      ;;
+    --category)
+      [[ $# -ge 2 ]] || ghalo_die "--category requires a value"
+      category="$2"
+      ghalo_validate_result_category "${category}"
       shift 2
       ;;
     --label)
@@ -248,6 +277,14 @@ is_positive_integer "${large_confirm_nodes}" ||
   ghalo_die "GHALO_LARGE_RUN_CONFIRM_NODES must be a positive integer"
 is_positive_number "${target_seconds}" ||
   ghalo_die "--target-seconds must be positive"
+is_positive_integer "${min_halo}" || ghalo_die "--min-halo must be a positive integer"
+is_positive_integer "${max_halo}" || ghalo_die "--max-halo must be a positive integer"
+is_positive_integer "${halo_multiplier}" ||
+  ghalo_die "--halo-multiplier must be a positive integer"
+[[ "${halo_multiplier}" -gt 1 ]] ||
+  ghalo_die "--halo-multiplier must be greater than 1"
+[[ "${max_halo}" -ge "${min_halo}" ]] ||
+  ghalo_die "--max-halo must be greater than or equal to --min-halo"
 [[ "${wall_time}" =~ ^[0-9]{1,2}:[0-9]{2}:[0-9]{2}$ ]] ||
   ghalo_die "--time must use HH:MM:SS"
 
@@ -323,10 +360,14 @@ sbatch_command+=(
   "${ranks}"
   "${ranks_per_node}"
   "${target_seconds}"
+  "${min_halo}"
+  "${max_halo}"
+  "${halo_multiplier}"
   "${validate}"
   "${phase_timing}"
   "${rccl_stage_b}"
   "${rccl_sync_mode}"
+  "${category}"
   "${label}"
   "${extra_srun_args}"
   "${original_submit_command}"

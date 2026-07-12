@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <iosfwd>
 #include <string>
 
@@ -11,6 +12,9 @@ struct CliOptions {
   std::string json_path = "ghalo.json";
   std::string device_map = "local-rank";
   std::string rccl_sync_mode = "conservative";
+  std::size_t min_halo = 2;
+  std::size_t max_halo = 1024;
+  std::size_t halo_multiplier = 2;
   double target_seconds = 3.0;
   bool show_help = false;
   bool validate = true;

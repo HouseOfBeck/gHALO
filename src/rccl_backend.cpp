@@ -125,11 +125,33 @@ std::string rccl_version(int rank, int local_rank, int device) {
 }
 
 std::string rocm_version() {
+  const auto trim_path_suffix = [](std::string version) {
+    const std::size_t slash = version.find('/');
+    if (slash != std::string::npos) {
+      version.erase(slash);
+    }
+    return version;
+  };
+  const std::string explicit_version = getenv_string("GHALO_ROCM_VERSION");
+  if (!explicit_version.empty()) {
+    return explicit_version;
+  }
   const std::string loaded = getenv_string("GHALO_LOADED_ROCM_MODULE");
   if (!loaded.empty()) {
+    const std::string prefix = "rocm/";
+    const std::size_t pos = loaded.find(prefix);
+    if (pos != std::string::npos) {
+      return trim_path_suffix(loaded.substr(pos + prefix.size()));
+    }
     return loaded;
   }
-  return getenv_string("ROCM_PATH");
+  const std::string path = getenv_string("ROCM_PATH");
+  const std::string prefix = "rocm-";
+  const std::size_t pos = path.find(prefix);
+  if (pos != std::string::npos) {
+    return trim_path_suffix(path.substr(pos + prefix.size()));
+  }
+  return path;
 }
 
 std::string values_string(const std::vector<float>& values) {

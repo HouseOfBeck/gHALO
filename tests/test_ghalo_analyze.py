@@ -160,6 +160,23 @@ class GhaloAnalyzeTests(unittest.TestCase):
         self.assertEqual(run.cartesian, "2x2")
         self.assertEqual(run.results[0].metadata["memory_location"], "host")
 
+    def test_load_runs_recurses_nested_result_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_result_dir(
+                root / "results" / "frontier" / "rocm-6.4.2" / "validation",
+                "20260712T000000Z_mpi-hip_validation",
+                rocm_version="6.4.2",
+            )
+            write_result_dir(
+                root / "results" / "frontier",
+                "20260712T000001Z_mpi-hip_flat",
+                rocm_version="6.4.2",
+            )
+            runs = analyze.load_runs([str(root / "results" / "frontier")])
+            self.assertEqual(len(runs), 2)
+            self.assertEqual({run.rocm_version for run in runs}, {"6.4.2"})
+
     def test_node_count_metadata_sources(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

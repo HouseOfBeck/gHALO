@@ -52,6 +52,102 @@ ghalo_sanitize_label() {
   printf '%s\n' "${label}"
 }
 
+ghalo_normalize_rocm_version() {
+  local value="${1:-}"
+  if [[ -z "${value}" ]]; then
+    value="${GHALO_ROCM_VERSION:-}"
+  fi
+  if [[ -z "${value}" ]]; then
+    value="${GHALO_LOADED_ROCM_MODULE:-}"
+  fi
+  if [[ -z "${value}" ]]; then
+    value="${ROCM_PATH:-}"
+  fi
+  if [[ -z "${value}" ]]; then
+    printf '%s\n' none
+    return
+  fi
+  value="${value#rocm/}"
+  if [[ "${value}" == *rocm-* ]]; then
+    value="${value##*rocm-}"
+  fi
+  value="${value%%/*}"
+  value="${value#rocm-}"
+  value="$(printf '%s' "${value}" | tr -c 'A-Za-z0-9._-' '_')"
+  value="${value##_}"
+  value="${value%%_}"
+  [[ -n "${value}" ]] || value=none
+  printf '%s\n' "${value}"
+}
+
+ghalo_validate_result_category() {
+  local category="$1"
+  case "${category}" in
+    validation | scaling | repeatability | phase-timing) ;;
+    *) ghalo_die "unsupported result category '${category}'. Expected validation, scaling, repeatability, or phase-timing." ;;
+  esac
+}
+
+ghalo_infer_result_category() {
+  local requested="$1"
+  local validate="$2"
+  local phase_timing="$3"
+  local label="$4"
+  if [[ -n "${requested}" ]]; then
+    ghalo_validate_result_category "${requested}"
+    printf '%s\n' "${requested}"
+    return
+  fi
+  if [[ "${phase_timing}" == true || "${phase_timing}" == 1 ]]; then
+    printf '%s\n' phase-timing
+  elif [[ "${validate}" == true || "${validate}" == 1 ]]; then
+    printf '%s\n' validation
+  elif [[ "${label}" == *scaling* || "${label}" == scale-* || "${label}" == scale_* ]]; then
+    printf '%s\n' scaling
+  else
+    printf '%s\n' repeatability
+  fi
+}
+
+ghalo_result_bundle_stem() {
+  local timestamp="$1"
+  local backend="$2"
+  local label="$3"
+  local safe_label
+  safe_label="$(ghalo_sanitize_label "${label}")"
+  safe_label="${safe_label#"${backend}"_}"
+  safe_label="${safe_label#"${backend}"-}"
+  [[ -n "${safe_label}" ]] || safe_label=run
+  printf '%s_%s_%s\n' "${timestamp}" "${backend}" "${safe_label}"
+}
+
+ghalo_unique_result_dir() {
+  local root="$1"
+  local system="$2"
+  local rocm_version="$3"
+  local category="$4"
+  local timestamp="$5"
+  local backend="$6"
+  local label="$7"
+  local parent
+  local stem
+  local candidate
+  local suffix
+
+  ghalo_validate_system_name "${system}"
+  ghalo_validate_result_category "${category}"
+  rocm_version="$(ghalo_normalize_rocm_version "${rocm_version}")"
+  parent="${root}/results/${system}/rocm-${rocm_version}/${category}"
+  stem="$(ghalo_result_bundle_stem "${timestamp}" "${backend}" "${label}")"
+  candidate="${parent}/${stem}"
+  suffix=2
+  while [[ -e "${candidate}" ]]; do
+    candidate="${parent}/${stem}_${suffix}"
+    suffix=$((suffix + 1))
+  done
+  printf '%s\n' "${candidate}"
+}
+
 ghalo_load_system_config() {
   local root="$1"
   local system="$2"

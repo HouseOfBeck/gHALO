@@ -169,12 +169,24 @@ run_benchmark_result() {
     "$@" 2>&1 | tee "${log}"
 
     result_dir="$(sed -n 's/^Result directory: //p' "${log}" | tail -n 1)"
-    if [[ -z "${result_dir}" || "${result_dir}" != "${REPO}/results/frontier/"* ]]; then
-        echo "ERROR: benchmark ${label} did not create a results/frontier bundle" >&2
+    if [[ -z "${result_dir}" || "${result_dir}" != "${REPO}/results/frontier/rocm-6.4.2/"* ]]; then
+        echo "ERROR: benchmark ${label} did not create a results/frontier/rocm-6.4.2 bundle" >&2
         exit 1
     fi
-    test -f "${result_dir}/ghalo.json" || {
-        echo "ERROR: missing structured JSON result for ${label}: ${result_dir}/ghalo.json" >&2
+    python3 -c '
+import json
+import pathlib
+import sys
+path = pathlib.Path(sys.argv[1])
+if not path.is_file() or path.stat().st_size == 0:
+    raise SystemExit(f"missing or empty JSON: {path}")
+with path.open(encoding="utf-8") as handle:
+    data = json.load(handle)
+results = data.get("results") if isinstance(data, dict) else None
+if not isinstance(results, list) or not results:
+    raise SystemExit(f"JSON lacks a non-empty results array: {path}")
+' "${result_dir}/ghalo.json" || {
+        echo "ERROR: malformed structured JSON result for ${label}: ${result_dir}/ghalo.json" >&2
         exit 1
     }
     test -f "${result_dir}/ghalo.csv" || {
@@ -232,6 +244,7 @@ run_benchmark_result \
     --ranks-per-node 8 \
     --validate \
     --target-seconds 0.1 \
+    --category validation \
     --label validation-1node-8ranks
 
 run_benchmark_result \
@@ -244,6 +257,7 @@ run_benchmark_result \
     --ranks-per-node 8 \
     --validate \
     --target-seconds 0.1 \
+    --category validation \
     --label validation-2nodes-16ranks
 
 echo
@@ -316,6 +330,7 @@ run_benchmark_result \
     --rccl-sync-mode conservative \
     --validate \
     --target-seconds 0.1 \
+    --category validation \
     --label conservative_validation-1node-8ranks
 
 run_benchmark_result \
@@ -329,7 +344,8 @@ run_benchmark_result \
     --rccl-sync-mode conservative \
     --validate \
     --target-seconds 0.1 \
-    --label rccl_conservative_validation-2nodes-16ranks
+    --category validation \
+    --label conservative_validation-2nodes-16ranks
 
 echo
 echo "############################################################"
@@ -349,6 +365,7 @@ run_benchmark_result \
     --rccl-sync-mode stream-ordered \
     --validate \
     --target-seconds 0.1 \
+    --category validation \
     --label stream-ordered_validation-1node-8ranks
 
 run_benchmark_result \
@@ -362,7 +379,8 @@ run_benchmark_result \
     --rccl-sync-mode stream-ordered \
     --validate \
     --target-seconds 0.1 \
-    --label rccl_stream-ordered_validation-2nodes-16ranks
+    --category validation \
+    --label stream-ordered_validation-2nodes-16ranks
 
 echo
 echo "############################################################"
@@ -382,6 +400,7 @@ run_benchmark_result \
     --validate \
     --phase-timing \
     --target-seconds 3 \
+    --category phase-timing \
     --label phase-1node-8ranks
 
 prepare_rccl
@@ -398,6 +417,7 @@ run_benchmark_result \
     --validate \
     --phase-timing \
     --target-seconds 3 \
+    --category phase-timing \
     --label stream-ordered_phase-1node-8ranks
 
 echo

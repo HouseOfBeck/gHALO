@@ -117,6 +117,26 @@ test_backend_validation_accepts_rccl() (
     "${output}" "backend validation lists rccl"
 )
 
+test_result_path_helpers() (
+  local root="${GHALO_TEST_TMPDIR}/ghalo-result-layout"
+  local result_dir
+  result_dir="$(ghalo_unique_result_dir \
+    "${root}" frontier 6.4.2 validation \
+    20260712T000000Z rccl rccl_conservative_validation)"
+  assert_eq \
+    "${root}/results/frontier/rocm-6.4.2/validation/20260712T000000Z_rccl_conservative_validation" \
+    "${result_dir}" \
+    "result path removes duplicate backend label"
+  mkdir -p "${result_dir}"
+  result_dir="$(ghalo_unique_result_dir \
+    "${root}" frontier 6.4.2 validation \
+    20260712T000000Z rccl rccl_conservative_validation)"
+  assert_eq \
+    "${root}/results/frontier/rocm-6.4.2/validation/20260712T000000Z_rccl_conservative_validation_2" \
+    "${result_dir}" \
+    "result path avoids collisions"
+)
+
 # This test intentionally modifies the active system inside a subshell while
 # verifying Borg's default build alias behavior.
 # shellcheck disable=SC2030,SC2031
@@ -546,7 +566,7 @@ test_submit_rank_layout_failure() (
 test_batch_job_requires_slurm() (
   local output="${GHALO_TEST_TMPDIR}/ghalo-batch-job-no-slurm.txt"
   if env -u SLURM_JOB_ID "${ROOT}/scripts/batch-job.sh" \
-    "${ROOT}" frontier mpi TEST123 batch 1 4 4 0.1 0 0 0 "" smoke "" submit out err \
+    "${ROOT}" frontier mpi TEST123 batch 1 4 4 0.1 2 1024 2 0 0 0 "" "" smoke "" submit out err \
     >"${output}" 2>&1; then
     printf 'expected batch-job without SLURM_JOB_ID to fail\n' >&2
     exit 1
@@ -585,9 +605,13 @@ EOF
     4 \
     4 \
     0.1 \
+    2 \
+    1024 \
+    2 \
     0 \
     0 \
     0 \
+    "" \
     "" \
     spool-test \
     "" \
@@ -602,6 +626,8 @@ EOF
     "mock run.sh succeeds"
   assert_contains "mock run.sh path=${fake_repo}/scripts/run.sh" "${marker}" \
     "batch job invoked run.sh from explicit root"
+  assert_contains "--min-halo 2 --max-halo 1024 --halo-multiplier 2" \
+    "${marker}" "batch job forwards halo range"
   assert_not_contains "${spool_dir}/scripts/run.sh" "${output}" \
     "batch job did not derive run.sh from spool path"
   assert_not_contains "${spool_dir}/scripts/run.sh" "${marker}" \
@@ -614,20 +640,49 @@ test_run_loop_uses_results_for_benchmarks() (
     "run_loop has benchmark result helper"
   assert_contains "env GHALO_SYSTEM_NAME=frontier scripts/run.sh" \
     "${run_loop}" "run_loop benchmark path uses scripts/run.sh"
+  assert_contains 'results/frontier/rocm-6.4.2' "${run_loop}" \
+    "run_loop requires versioned result hierarchy"
+  assert_contains 'JSON lacks a non-empty results array' "${run_loop}" \
+    "run_loop rejects malformed result bundles"
   assert_contains 'Benchmark results:' "${run_loop}" \
     "run_loop prints benchmark result summary"
   assert_contains 'Harness logs:' "${run_loop}" \
     "run_loop prints harness log summary"
-  assert_contains 'rccl_conservative_validation-1node-8ranks' "${run_loop}" \
+  assert_contains 'conservative_validation-1node-8ranks' "${run_loop}" \
     "run_loop labels conservative RCCL results distinctly"
-  assert_contains 'rccl_stream-ordered_validation-1node-8ranks' "${run_loop}" \
+  assert_contains 'stream-ordered_validation-1node-8ranks' "${run_loop}" \
     "run_loop labels stream-ordered RCCL results distinctly"
-  assert_contains 'rccl_stream-ordered_phase-1node-8ranks' "${run_loop}" \
+  assert_contains 'stream-ordered_phase-1node-8ranks' "${run_loop}" \
     "run_loop phase run uses structured result label"
+  assert_not_contains 'rccl_rccl' "${run_loop}" \
+    "run_loop does not create duplicated RCCL names"
   assert_contains 'rccl-smoke-1node-8ranks' "${run_loop}" \
     "run_loop keeps standalone smoke diagnostics"
   assert_contains "run_and_check" "${run_loop}" \
     "run_loop retains harness diagnostic helper"
+)
+
+test_migrate_results_dry_run() (
+  local flat="${GHALO_TEST_TMPDIR}/results/frontier/20260712T000000Z_rccl_rccl_conservative"
+  local output="${GHALO_TEST_TMPDIR}/ghalo-migrate-results.txt"
+  mkdir -p "${flat}"
+  cat >"${flat}/system-resolution.txt" <<'EOF'
+active_system=frontier
+backend=rccl
+EOF
+  cat >"${flat}/ghalo.json" <<'EOF'
+{"results":[{"backend":"RCCLBackend","metadata":{"rocm_version":"6.4.2","validation_enabled":true}}]}
+EOF
+  python3 "${ROOT}/tools/migrate_results.py" --dry-run \
+    --root "${GHALO_TEST_TMPDIR}" "${GHALO_TEST_TMPDIR}/results/frontier" \
+    >"${output}"
+  assert_contains \
+    "results/frontier/rocm-6.4.2/validation/20260712T000000Z_rccl_conservative" \
+    "${output}" "migration dry-run chooses versioned path"
+  if sed -n 's/^.* -> //p' "${output}" | grep -Fq 'rccl_rccl'; then
+    printf 'migration destination should not contain duplicated backend name\n' >&2
+    exit 1
+  fi
 )
 
 test_borg_build_alias_resolution
@@ -635,6 +690,7 @@ test_native_default_for_generic_system
 test_missing_aliased_binary_error
 test_system_resolution_metadata
 test_backend_validation_accepts_rccl
+test_result_path_helpers
 test_borg_rccl_uses_frontier_build_alias
 test_frontier_rccl_cmake_args
 test_frontier_backend_specific_rocm_selection
@@ -647,3 +703,4 @@ test_submit_rank_layout_failure
 test_batch_job_requires_slurm
 test_batch_job_uses_explicit_repo_root_from_spool_copy
 test_run_loop_uses_results_for_benchmarks
+test_migrate_results_dry_run
