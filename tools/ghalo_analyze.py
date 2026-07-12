@@ -476,6 +476,53 @@ def plural(count: int, unit: str) -> str:
     return f"{count} {unit}{suffix}"
 
 
+def backend_sort_key(backend: str) -> Tuple[int, str]:
+    lowered = backend.lower()
+    if "mpi" in lowered and "hip" in lowered:
+        return (0, lowered)
+    if "rccl" in lowered:
+        return (1, lowered)
+    if "mpi" in lowered:
+        return (2, lowered)
+    return (9, lowered)
+
+
+def rccl_sync_sort_key(mode: str) -> Tuple[int, str]:
+    lowered = mode.lower()
+    if not lowered:
+        return (0, "")
+    if lowered == "conservative":
+        return (1, lowered)
+    if lowered == "stream-ordered":
+        return (2, lowered)
+    return (3, lowered)
+
+
+def optional_count_sort_key(value: Optional[int]) -> Tuple[int, int]:
+    return (1, 0) if value is None else (0, value)
+
+
+def run_output_sort_key(run: Run) -> Tuple[Any, ...]:
+    return (
+        run.system.lower(),
+        run.rocm_version.lower(),
+        *backend_sort_key(run.backend),
+        *rccl_sync_sort_key(run.rccl_sync_mode),
+        *optional_count_sort_key(run.nodes),
+        *optional_count_sort_key(run.ranks),
+        run.timestamp,
+        str(run.result_path),
+    )
+
+
+def sorted_runs_for_output(runs: Sequence[Run]) -> List[Run]:
+    return sorted(runs, key=run_output_sort_key)
+
+
+def result_output_sort_key(result: RunResult) -> Tuple[int, int]:
+    return (result.total_exchange_bytes_per_rank, result.halo_words)
+
+
 def parse_metadata_text(text: str) -> Dict[str, str]:
     values: Dict[str, str] = {}
     for line in text.splitlines():
@@ -796,7 +843,7 @@ def summary_rows(
     label_override: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     rows = []
-    for result in sorted(run.results, key=lambda item: item.halo_words):
+    for result in sorted(run.results, key=result_output_sort_key):
         row: Dict[str, Any] = {
             "label": label_override or run.label,
             "system": run.system,
@@ -822,6 +869,7 @@ def summary_rows(
                     "git_commit": run.git_commit,
                     "slurm_job_id": run.slurm_job_id,
                     "rocm_version": run.rocm_version,
+                    "rccl_sync_mode": run.rccl_sync_mode,
                     "suite": run.suite,
                     "timestamp": run.timestamp,
                     "path_backend": run.path_metadata.get("backend", ""),
@@ -963,7 +1011,7 @@ def format_cell(value: Any) -> str:
 
 
 def command_summarize(args: argparse.Namespace) -> int:
-    runs = load_runs(args.inputs)
+    runs = sorted_runs_for_output(load_runs(args.inputs))
     if args.output_dir:
         write_analysis_directory(args.output_dir, runs)
     rows: List[Dict[str, Any]] = []
@@ -1109,7 +1157,7 @@ def percentile(values: Sequence[float], fraction: float) -> float:
 def compatibility_key(run: Run) -> Tuple[Any, ...]:
     bytes_by_halo = tuple(
         (result.halo_words, result.total_exchange_bytes_per_rank)
-        for result in sorted(run.results, key=lambda item: item.halo_words)
+        for result in sorted(run.results, key=result_output_sort_key)
     )
     return (
         run.backend,
@@ -1173,7 +1221,7 @@ def aggregate_group_metadata(run: Run, key: Tuple[Any, ...], group_by: Sequence[
 
     bytes_by_halo = ";".join(
         f"N={result.halo_words}:{result.total_exchange_bytes_per_rank}B/rank"
-        for result in sorted(run.results, key=lambda item: item.halo_words)
+        for result in sorted(run.results, key=result_output_sort_key)
     )
     label_parts = []
     if run.system:
@@ -1206,18 +1254,32 @@ def aggregate_group_metadata(run: Run, key: Tuple[Any, ...], group_by: Sequence[
 
 def aggregate_rows(runs: List[Run], allow_mixed: bool, group_by: Sequence[str]) -> List[Dict[str, Any]]:
     groups: Dict[Tuple[Any, ...], List[Run]] = {}
-    for run in runs:
+    for run in sorted_runs_for_output(runs):
         key = grouping_key(run, group_by) if allow_mixed and group_by else compatibility_key(run)
         groups.setdefault(key, []).append(run)
     if not allow_mixed and len(groups) > 1:
         raise AnalysisError("aggregate inputs have incompatible configurations; use --allow-mixed to group them")
 
     rows: List[Dict[str, Any]] = []
-    for key, group_runs in groups.items():
+    for key, group_runs in sorted(groups.items(), key=lambda item: run_output_sort_key(item[1][0])):
         group_metadata = aggregate_group_metadata(group_runs[0], key, group_by)
-        halos = sorted({result.halo_words for run in group_runs for result in run.results})
-        for halo in halos:
-            values = [results_by_halo(run)[halo].max_average_seconds for run in group_runs if halo in results_by_halo(run)]
+        halo_sizes: Dict[int, int] = {}
+        for run in group_runs:
+            for result in run.results:
+                previous = halo_sizes.get(result.halo_words)
+                if previous is None:
+                    halo_sizes[result.halo_words] = result.total_exchange_bytes_per_rank
+                else:
+                    halo_sizes[result.halo_words] = min(
+                        previous,
+                        result.total_exchange_bytes_per_rank,
+                    )
+        for halo in sorted(halo_sizes, key=lambda item: (halo_sizes[item], item)):
+            values = [
+                results_by_halo(run)[halo].max_average_seconds
+                for run in group_runs
+                if halo in results_by_halo(run)
+            ]
             if not values:
                 continue
             mean = statistics.fmean(values)
@@ -1240,7 +1302,7 @@ def aggregate_rows(runs: List[Run], allow_mixed: bool, group_by: Sequence[str]) 
 
 
 def command_aggregate(args: argparse.Namespace) -> int:
-    runs = load_runs(args.inputs)
+    runs = sorted_runs_for_output(load_runs(args.inputs))
     rows = aggregate_rows(runs, args.allow_mixed, args.group_by)
     write_output(rows, args.format, args.output)
     write_warnings(runs)
@@ -1269,8 +1331,8 @@ def choose_baseline(args: argparse.Namespace, runs: List[Run]) -> Run:
 def scaling_rows(runs: List[Run], baseline: Run) -> List[Dict[str, Any]]:
     baseline_results = results_by_halo(baseline)
     rows = []
-    for run in runs:
-        for result in sorted(run.results, key=lambda item: item.halo_words):
+    for run in sorted_runs_for_output(runs):
+        for result in sorted(run.results, key=result_output_sort_key):
             base = baseline_results.get(result.halo_words)
             if base is None:
                 continue
@@ -1295,7 +1357,7 @@ def scaling_rows(runs: List[Run], baseline: Run) -> List[Dict[str, Any]]:
 
 
 def command_scaling(args: argparse.Namespace) -> int:
-    runs = load_runs(args.inputs)
+    runs = sorted_runs_for_output(load_runs(args.inputs))
     baseline = choose_baseline(args, runs)
     rows = scaling_rows(runs, baseline)
     write_output(rows, args.format, args.output)
@@ -1512,6 +1574,8 @@ def output_dpi(style: str, output_format: str, dpi: Optional[int]) -> Optional[i
 
 def command_plot(args: argparse.Namespace) -> int:
     runs = load_runs(args.inputs)
+    if args.kind != "percent-difference":
+        runs = sorted_runs_for_output(runs)
     overrides = label_overrides(args, len(runs))
     x_axis_request = getattr(args, "x_axis", "auto")
     style = getattr(args, "style", "default")
@@ -1642,6 +1706,7 @@ def checksum(path: Path) -> Optional[str]:
 
 
 def write_analysis_directory(output_root: str, runs: List[Run]) -> None:
+    runs = sorted_runs_for_output(runs)
     output_dir = Path(output_root) / "analysis"
     plots_dir = output_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
@@ -1698,6 +1763,7 @@ def analysis_git_commit() -> str:
 
 
 def write_report_directory(args: argparse.Namespace, runs: List[Run]) -> List[str]:
+    runs = sorted_runs_for_output(runs)
     output_dir = Path(args.output_dir)
     if output_dir.exists() and not output_dir.is_dir():
         raise AnalysisError(f"report output path exists but is not a directory: {output_dir}")

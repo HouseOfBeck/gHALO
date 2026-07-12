@@ -226,6 +226,140 @@ class GhaloAnalyzeTests(unittest.TestCase):
         self.assertEqual(run.ranks, 8)
         self.assertEqual(run.suite, "")
 
+    def test_output_sort_order_uses_result_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runs = [
+                analyze.load_run(
+                    str(
+                        write_result_dir(
+                            root,
+                            "z-stream-two-node",
+                            backend="RCCLBackend",
+                            rccl_sync_mode="stream-ordered",
+                            rocm_version="6.4.2",
+                            nodes_metadata=2,
+                            ranks=16,
+                            timings={4: 4.0e-5, 2: 2.0e-5},
+                        )
+                    )
+                ),
+                analyze.load_run(
+                    str(
+                        write_result_dir(
+                            root,
+                            "a-rccl-conservative-one-node",
+                            backend="RCCLBackend",
+                            rccl_sync_mode="conservative",
+                            rocm_version="6.4.2",
+                            nodes_metadata=1,
+                            ranks=8,
+                            timings={4: 4.0e-5, 2: 2.0e-5},
+                        )
+                    )
+                ),
+                analyze.load_run(
+                    str(
+                        write_result_dir(
+                            root,
+                            "b-mpi-hip-two-node",
+                            rocm_version="6.4.2",
+                            nodes_metadata=2,
+                            ranks=16,
+                            timings={4: 4.0e-5, 2: 2.0e-5},
+                        )
+                    )
+                ),
+                analyze.load_run(
+                    str(
+                        write_result_dir(
+                            root,
+                            "c-stream-one-node",
+                            backend="RCCLBackend",
+                            rccl_sync_mode="stream-ordered",
+                            rocm_version="6.4.2",
+                            nodes_metadata=1,
+                            ranks=8,
+                            timings={4: 4.0e-5, 2: 2.0e-5},
+                        )
+                    )
+                ),
+                analyze.load_run(
+                    str(
+                        write_result_dir(
+                            root,
+                            "d-mpi-hip-one-node",
+                            rocm_version="6.4.2",
+                            nodes_metadata=1,
+                            ranks=8,
+                            timings={4: 4.0e-5, 2: 2.0e-5},
+                        )
+                    )
+                ),
+                analyze.load_run(
+                    str(
+                        write_result_dir(
+                            root,
+                            "e-rccl-conservative-two-node",
+                            backend="RCCLBackend",
+                            rccl_sync_mode="conservative",
+                            rocm_version="6.4.2",
+                            nodes_metadata=2,
+                            ranks=16,
+                            timings={4: 4.0e-5, 2: 2.0e-5},
+                        )
+                    )
+                ),
+            ]
+
+        ordered = analyze.sorted_runs_for_output(runs)
+        self.assertEqual(
+            [
+                (run.backend, run.rccl_sync_mode, run.nodes, run.ranks)
+                for run in ordered
+            ],
+            [
+                ("MPIHIPBackend", "", 1, 8),
+                ("MPIHIPBackend", "", 2, 16),
+                ("RCCLBackend", "conservative", 1, 8),
+                ("RCCLBackend", "conservative", 2, 16),
+                ("RCCLBackend", "stream-ordered", 1, 8),
+                ("RCCLBackend", "stream-ordered", 2, 16),
+            ],
+        )
+
+        rows = [
+            row
+            for run in ordered
+            for row in analyze.summary_rows(run, include_metadata=True)
+        ]
+        self.assertEqual(
+            [
+                (
+                    row["backend"],
+                    row["rccl_sync_mode"],
+                    row["nodes"],
+                    row["ranks"],
+                    row["halo_words"],
+                )
+                for row in rows
+            ],
+            [
+                ("MPIHIPBackend", "", 1, 8, 2),
+                ("MPIHIPBackend", "", 1, 8, 4),
+                ("MPIHIPBackend", "", 2, 16, 2),
+                ("MPIHIPBackend", "", 2, 16, 4),
+                ("RCCLBackend", "conservative", 1, 8, 2),
+                ("RCCLBackend", "conservative", 1, 8, 4),
+                ("RCCLBackend", "conservative", 2, 16, 2),
+                ("RCCLBackend", "conservative", 2, 16, 4),
+                ("RCCLBackend", "stream-ordered", 1, 8, 2),
+                ("RCCLBackend", "stream-ordered", 1, 8, 4),
+                ("RCCLBackend", "stream-ordered", 2, 16, 2),
+                ("RCCLBackend", "stream-ordered", 2, 16, 4),
+            ],
+        )
+
     def test_node_count_metadata_sources(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
