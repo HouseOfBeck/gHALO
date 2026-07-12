@@ -510,6 +510,82 @@ See `scripts/systems/example.sh` for a template.
 
 `scripts/systems/frontier.sh` is the initial Frontier configuration.
 
+### Frontier ROCm 6.4.2 Validation Workflow
+
+This is the concise workflow for reproducing the Frontier validation campaign
+from a login node or workflow checkout. It assumes the site batch script exists
+at `slurm/validation.sbatch` and delegates execution to the repository scripts
+described above.
+
+1. Build the GPU backends:
+
+   ```sh
+   GHALO_SYSTEM_NAME=frontier scripts/build.sh --backend mpi-hip --clean --jobs 8
+   GHALO_SYSTEM_NAME=frontier scripts/build.sh --backend rccl --clean --jobs 8
+   ```
+
+2. Submit validation:
+
+   ```sh
+   sbatch slurm/validation.sbatch
+   ```
+
+   The validation job should run MPI-HIP, RCCL conservative, and RCCL
+   stream-ordered cases through `scripts/run.sh` or
+   `scripts/run_validation_suite.sh` so result metadata and directory layout
+   remain consistent.
+
+3. Inspect results:
+
+   ```text
+   results/frontier/<rocm-version>/<suite>/<run>/
+   ```
+
+   For the ROCm 6.4.2 validation baseline, this is typically:
+
+   ```text
+   results/frontier/rocm-6.4.2/validation/<timestamp>_<backend>_<label>/
+   ```
+
+4. Generate reports:
+
+   ```sh
+   python3 tools/ghalo_analyze.py summarize \
+     --include-metadata \
+     --phase-timing \
+     --format markdown \
+     results/frontier/rocm-6.4.2/validation
+
+   python3 tools/ghalo_analyze.py report \
+     --style publication \
+     --output-dir analysis/frontier-rocm-6.4.2-validation \
+     results/frontier/rocm-6.4.2/validation
+
+   python3 tools/ghalo_analyze.py plot \
+     --kind latency \
+     --output analysis/frontier-rocm-6.4.2-validation/plots/latency.png \
+     results/frontier/rocm-6.4.2/validation
+   ```
+
+   The convenience wrapper is equivalent for the common report bundle:
+
+   ```sh
+   scripts/generate_analysis_report.sh \
+     --input results/frontier/rocm-6.4.2/validation \
+     --output analysis/frontier-rocm-6.4.2-validation
+   ```
+
+5. Reproduce the tagged baseline source:
+
+   ```sh
+   git fetch --tags
+   git checkout frontier-rocm-6.4.2-validation-baseline
+   ```
+
+   After checking out the tag, rebuild before comparing new results against
+   the baseline. Result directories are intentionally separate from Git tags;
+   keep the result bundle paths and `provenance.json` with any report.
+
 Build examples:
 
 ```sh
