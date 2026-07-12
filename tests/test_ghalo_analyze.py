@@ -177,6 +177,55 @@ class GhaloAnalyzeTests(unittest.TestCase):
             self.assertEqual(len(runs), 2)
             self.assertEqual({run.rocm_version for run in runs}, {"6.4.2"})
 
+    def test_hierarchical_frontier_path_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result = write_result_dir(
+                root / "results" / "frontier" / "rocm-6.4.2" / "validation",
+                "20260712T220219Z_rccl_conservative-validation-1node-8ranks",
+                backend="RCCLBackend",
+                ranks=8,
+                metadata_files={
+                    "system-resolution.txt": "build_system=frontier\nbackend=rccl\n"
+                },
+            )
+            run = analyze.load_run(str(result))
+
+        self.assertEqual(run.system, "frontier")
+        self.assertEqual(run.rocm_version, "rocm-6.4.2")
+        self.assertEqual(run.suite, "validation")
+        self.assertEqual(run.timestamp, "20260712T220219Z")
+        self.assertEqual(run.path_metadata["backend"], "rccl")
+        self.assertEqual(run.path_metadata["label"], "conservative-validation-1node-8ranks")
+        self.assertEqual(run.nodes, 1)
+        self.assertEqual(run.ranks, 8)
+        self.assertEqual(run.rccl_sync_mode, "conservative")
+
+        rows = analyze.summary_rows(run, include_metadata=True)
+        self.assertEqual(rows[0]["rocm_version"], "rocm-6.4.2")
+        self.assertEqual(rows[0]["suite"], "validation")
+        self.assertEqual(rows[0]["timestamp"], "20260712T220219Z")
+        self.assertEqual(rows[0]["path_backend"], "rccl")
+
+    def test_flat_result_path_metadata_remains_supported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result = write_result_dir(
+                root / "results" / "frontier",
+                "20260712T220220Z_mpi-hip_validation-1node-8ranks",
+                metadata_files={
+                    "system-resolution.txt": "build_system=frontier\nbackend=mpi-hip\n"
+                },
+            )
+            run = analyze.load_run(str(result))
+
+        self.assertEqual(run.system, "frontier")
+        self.assertEqual(run.timestamp, "20260712T220220Z")
+        self.assertEqual(run.path_metadata["backend"], "mpi-hip")
+        self.assertEqual(run.nodes, 1)
+        self.assertEqual(run.ranks, 8)
+        self.assertEqual(run.suite, "")
+
     def test_node_count_metadata_sources(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -10,6 +10,7 @@ import json
 import math
 import os
 import platform
+import re
 import statistics
 import subprocess
 import sys
@@ -19,6 +20,9 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 GIB = 1024.0**3
+KNOWN_BACKENDS = ("mpi-hip", "rccl", "mpi")
+RUN_NAME_RE = re.compile(r"^(?P<timestamp>\d{8}T\d{6}Z)_(?P<rest>.+)$")
+VERSION_RE = re.compile(r"^(?:rocm-)?\d+(?:\.\d+)+(?:[-._A-Za-z0-9]*)?$")
 
 REQUIRED_FIELDS = (
     "backend",
@@ -132,7 +136,7 @@ class Run:
 
     @property
     def backend(self) -> str:
-        return self.results[0].backend if self.results else ""
+        return self.results[0].backend if self.results else self.path_metadata.get("backend", "")
 
     @property
     def algorithm(self) -> str:
@@ -147,21 +151,44 @@ class Run:
     @property
     def rccl_sync_mode(self) -> str:
         if not self.results:
-            return ""
-        return str(self.results[0].metadata.get("rccl_sync_mode", ""))
+            return self.path_metadata.get("rccl_sync_mode", "")
+        return (
+            str(self.results[0].metadata.get("rccl_sync_mode", ""))
+            or self.meta_value("rccl_sync_mode")
+            or self.path_metadata.get("rccl_sync_mode", "")
+        )
 
     @property
     def rocm_version(self) -> str:
         if not self.results:
-            return ""
-        return str(self.results[0].metadata.get("rocm_version", ""))
+            return self.path_metadata.get("rocm_version", "")
+        return (
+            str(self.results[0].metadata.get("rocm_version", ""))
+            or self.meta_value("rocm_version")
+            or self.path_metadata.get("rocm_version", "")
+        )
+
+    @property
+    def suite(self) -> str:
+        return (
+            self.meta_value("suite")
+            or self.meta_value("result_category")
+            or self.path_metadata.get("suite", "")
+        )
+
+    @property
+    def timestamp(self) -> str:
+        return self.meta_value("timestamp") or self.path_metadata.get("timestamp", "")
 
     @property
     def ranks(self) -> Optional[int]:
         if not self.results:
-            return None
+            return parse_int(self.path_metadata.get("ranks"))
         value = self.results[0].topology.get("world_size")
-        return int(value) if value not in (None, "") else None
+        parsed = parse_int(value)
+        if parsed is not None:
+            return parsed
+        return parse_int(self.path_metadata.get("ranks"))
 
     @property
     def rows(self) -> Optional[int]:
@@ -185,7 +212,11 @@ class Run:
 
     @property
     def system(self) -> str:
-        return self.meta_value("active_system") or infer_system_from_path(self.result_path)
+        return (
+            self.meta_value("active_system")
+            or self.path_metadata.get("system", "")
+            or infer_system_from_path(self.result_path)
+        )
 
     @property
     def build_system(self) -> str:
@@ -215,6 +246,10 @@ class Run:
             parsed = parse_int(value)
             if parsed is not None:
                 return parsed
+
+        parsed = parse_int(self.path_metadata.get("nodes"))
+        if parsed is not None:
+            return parsed
 
         ranks = self.ranks
         ranks_per_node = self.ranks_per_node
@@ -314,6 +349,10 @@ class Run:
                         return slurm_values[key]
         return None
 
+    @property
+    def path_metadata(self) -> Dict[str, str]:
+        return infer_path_metadata(self.result_path)
+
 
 def parse_int(value: Optional[str]) -> Optional[int]:
     if value in (None, ""):
@@ -343,6 +382,78 @@ def infer_system_from_path(path: Path) -> str:
         if index + 1 < len(parts):
             return parts[index + 1]
     return ""
+
+
+def split_run_name(name: str) -> Dict[str, str]:
+    match = RUN_NAME_RE.match(name)
+    if not match:
+        return {}
+    rest = match.group("rest")
+    for backend in KNOWN_BACKENDS:
+        if rest == backend:
+            return {"timestamp": match.group("timestamp"), "backend": backend}
+        for separator in ("_", "-"):
+            prefix = backend + separator
+            if rest.startswith(prefix):
+                return {
+                    "timestamp": match.group("timestamp"),
+                    "backend": backend,
+                    "label": rest[len(prefix):],
+                }
+    return {"timestamp": match.group("timestamp"), "label": rest}
+
+
+def infer_rccl_sync_mode(label: str) -> str:
+    lowered = label.lower()
+    if "stream-ordered" in lowered:
+        return "stream-ordered"
+    if "conservative" in lowered:
+        return "conservative"
+    return ""
+
+
+def parse_count_from_label(label: str, unit: str) -> Optional[str]:
+    match = re.search(rf"(\d+)[-_]?{unit}s?\b", label, re.IGNORECASE)
+    return match.group(1) if match else None
+
+
+def infer_path_metadata(path: Path) -> Dict[str, str]:
+    metadata: Dict[str, str] = {}
+    parts = path.parts
+    if "results" in parts:
+        index = parts.index("results")
+        if index + 1 < len(parts):
+            metadata["system"] = parts[index + 1]
+        relative = parts[index + 2:]
+    else:
+        relative = (path.name,)
+
+    if len(relative) >= 3 and VERSION_RE.match(relative[0]):
+        metadata["rocm_version"] = relative[0]
+        metadata["suite"] = relative[1]
+        run_name = relative[2]
+    elif relative:
+        run_name = relative[0]
+    else:
+        run_name = path.name
+
+    run_metadata = split_run_name(run_name)
+    metadata.update(run_metadata)
+    label = run_metadata.get("label", "")
+    backend = run_metadata.get("backend", "")
+    if backend:
+        metadata["backend"] = backend
+    if backend == "rccl":
+        mode = infer_rccl_sync_mode(label)
+        if mode:
+            metadata["rccl_sync_mode"] = mode
+    nodes = parse_count_from_label(label, "node")
+    if nodes:
+        metadata["nodes"] = nodes
+    ranks = parse_count_from_label(label, "rank")
+    if ranks:
+        metadata["ranks"] = ranks
+    return metadata
 
 
 def display_system(system: str) -> str:
@@ -438,6 +549,7 @@ def read_metadata_files(result_path: Path) -> Dict[str, str]:
         "slurm-job.txt",
         "command.txt",
         "exit-status.txt",
+        "result-metadata.txt",
     )
     files: Dict[str, str] = {}
     if result_path.is_dir():
@@ -709,6 +821,11 @@ def summary_rows(
                     "build_system": run.build_system,
                     "git_commit": run.git_commit,
                     "slurm_job_id": run.slurm_job_id,
+                    "rocm_version": run.rocm_version,
+                    "suite": run.suite,
+                    "timestamp": run.timestamp,
+                    "path_backend": run.path_metadata.get("backend", ""),
+                    "path_label": run.path_metadata.get("label", ""),
                     "source_format": run.source_format,
                     "input_path": str(run.input_path),
                 }
