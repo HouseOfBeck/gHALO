@@ -55,7 +55,8 @@ srun -N 1 -n 8 --ntasks-per-node=8 \
 ```
 
 The full path participates in the normal gHALO timing loop after validation.
-It does not implement RCCL phase timing or make performance-comparison claims.
+It supports diagnostic RCCL phase timing, but does not make
+performance-comparison claims.
 
 ## Integrated Stage B
 
@@ -115,5 +116,5 @@ srun -N 2 -n 16 --ntasks-per-node=8 builds/borg/rccl/ghalo \
 ```
 
 Also rerun Stage B at one and two nodes when debugging RCCL transport issues.
-Do not compare RCCL timings against `mpi-hip` until phase timing and
-synchronization policy have been studied.
+Do not compare RCCL timings against `mpi-hip` until synchronization policy and
+placement sensitivity have been studied.

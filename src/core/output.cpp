@@ -52,6 +52,67 @@ bool has_phase_timing(const std::vector<BenchmarkResult>& results) {
   return false;
 }
 
+bool has_input_device_copy_phase(const std::vector<BenchmarkResult>& results) {
+  for (const auto& result : results) {
+    if (result.phase_timing.has_value() &&
+        result.phase_timing->input_device_copy_seconds != 0.0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool has_generic_phase_fields(const PhaseTimingResult& phase) {
+  return phase.north_south_communication_seconds != 0.0 ||
+         phase.transpose_copy_seconds != 0.0 ||
+         phase.transpose_sync_seconds != 0.0 ||
+         phase.east_west_communication_seconds != 0.0 ||
+         phase.total_exchange_seconds != 0.0;
+}
+
+double phase_north_south_communication(const PhaseTimingResult& phase) {
+  return has_generic_phase_fields(phase)
+             ? phase.north_south_communication_seconds
+             : phase.north_south_mpi_seconds;
+}
+
+double phase_transpose_copy(const PhaseTimingResult& phase) {
+  return has_generic_phase_fields(phase) ? phase.transpose_copy_seconds
+                                         : phase.transpose_device_copy_seconds;
+}
+
+double phase_transpose_sync(const PhaseTimingResult& phase) {
+  return has_generic_phase_fields(phase) ? phase.transpose_sync_seconds
+                                         : phase.transpose_copy_sync_seconds;
+}
+
+double phase_east_west_communication(const PhaseTimingResult& phase) {
+  return has_generic_phase_fields(phase)
+             ? phase.east_west_communication_seconds
+             : phase.east_west_mpi_seconds;
+}
+
+double phase_total_exchange(const PhaseTimingResult& phase,
+                            const BenchmarkResult& result) {
+  return phase.total_exchange_seconds != 0.0 ? phase.total_exchange_seconds
+                                             : result.max_average_seconds;
+}
+
+double phase_total_minus_sum(const PhaseTimingResult& phase) {
+  return has_generic_phase_fields(phase)
+             ? phase.total_minus_sum_of_phase_maxima_seconds
+             : phase.unattributed_seconds;
+}
+
+std::string phase_timing_label(const BenchmarkResult& result) {
+  if (!result.metadata.rccl_version.empty() ||
+      result.algorithm.find("rccl") != std::string::npos ||
+      result.backend.find("RCCL") != std::string::npos) {
+    return "RCCL phase timing";
+  }
+  return "MPI-HIP phase timing";
+}
+
 } // namespace
 
 void write_console(std::ostream& out,
@@ -114,32 +175,40 @@ void write_console(std::ostream& out,
   }
 
   if (has_phase_timing(results)) {
-    out << "\nMPI-HIP phase timing (microseconds, max average per rank):\n";
-    out << std::setw(8) << "N" << std::setw(16) << "input_copy_us"
-        << std::setw(14) << "ns_mpi_us" << std::setw(14) << "ns_sync_us"
+    const bool include_input_copy = has_input_device_copy_phase(results);
+    out << "\n" << phase_timing_label(results.front())
+        << " (microseconds, max average per rank):\n";
+    out << std::setw(8) << "N";
+    if (include_input_copy) {
+      out << std::setw(16) << "input_copy_us";
+    }
+    out << std::setw(14) << "ns_comm_us" << std::setw(14) << "ns_sync_us"
         << std::setw(20) << "transpose_copy_us" << std::setw(18)
-        << "transpose_sync_us" << std::setw(14) << "ew_mpi_us"
+        << "transpose_sync_us" << std::setw(14) << "ew_comm_us"
         << std::setw(14) << "ew_sync_us" << std::setw(16)
-        << "phase_sum_us" << std::setw(14) << "total_us" << std::setw(18)
-        << "unattributed_us" << "\n";
-    out << std::string(166, '-') << "\n";
+        << "phase_sum_us" << std::setw(14) << "total_us" << std::setw(22)
+        << "total_minus_sum_us" << "\n";
+    out << std::string(include_input_copy ? 156 : 140, '-') << "\n";
     for (const auto& result : results) {
       if (!result.phase_timing.has_value()) {
         continue;
       }
       const auto& phase = *result.phase_timing;
       constexpr double us = 1.0e6;
-      out << std::setw(8) << result.halo_words << std::setw(16)
-          << phase.input_device_copy_seconds * us << std::setw(14)
-          << phase.north_south_mpi_seconds * us << std::setw(14)
+      out << std::setw(8) << result.halo_words;
+      if (include_input_copy) {
+        out << std::setw(16) << phase.input_device_copy_seconds * us;
+      }
+      out << std::setw(14) << phase_north_south_communication(phase) * us
+          << std::setw(14)
           << phase.north_south_sync_seconds * us << std::setw(20)
-          << phase.transpose_device_copy_seconds * us << std::setw(18)
-          << phase.transpose_copy_sync_seconds * us << std::setw(14)
-          << phase.east_west_mpi_seconds * us << std::setw(14)
+          << phase_transpose_copy(phase) * us << std::setw(18)
+          << phase_transpose_sync(phase) * us << std::setw(14)
+          << phase_east_west_communication(phase) * us << std::setw(14)
           << phase.east_west_sync_seconds * us << std::setw(16)
           << phase.phase_sum_seconds * us << std::setw(14)
-          << result.max_average_seconds * us << std::setw(18)
-          << phase.unattributed_seconds * us << "\n";
+          << phase_total_exchange(phase, result) * us << std::setw(22)
+          << phase_total_minus_sum(phase) * us << "\n";
     }
   }
 }
@@ -165,8 +234,14 @@ void write_csv(const std::string& path,
            "phase_transpose_copy_sync_seconds,"
            "phase_east_west_mpi_seconds,"
            "phase_east_west_sync_seconds,"
+           "phase_north_south_communication_seconds,"
+           "phase_transpose_copy_seconds,"
+           "phase_transpose_sync_seconds,"
+           "phase_east_west_communication_seconds,"
            "phase_sum_seconds,"
-           "phase_unattributed_seconds";
+           "phase_unattributed_seconds,"
+           "phase_total_exchange_seconds,"
+           "phase_total_minus_sum_of_phase_maxima_seconds";
   }
   out << "\n";
 
@@ -200,9 +275,15 @@ void write_csv(const std::string& path,
             << phase.transpose_copy_sync_seconds << ','
             << phase.east_west_mpi_seconds << ','
             << phase.east_west_sync_seconds << ','
-            << phase.phase_sum_seconds << ',' << phase.unattributed_seconds;
+            << phase.north_south_communication_seconds << ','
+            << phase.transpose_copy_seconds << ','
+            << phase.transpose_sync_seconds << ','
+            << phase.east_west_communication_seconds << ','
+            << phase.phase_sum_seconds << ',' << phase.unattributed_seconds
+            << ',' << phase_total_exchange(phase, result) << ','
+            << phase_total_minus_sum(phase);
       } else {
-        out << ",,,,,,,,,";
+        out << ",,,,,,,,,,,,,,,";
       }
     }
     out << '\n';
@@ -263,6 +344,12 @@ void write_json(const std::string& path,
     out << "        \"rccl_plugin_root\": ";
     write_json_string(out, r.metadata.rccl_plugin_root);
     out << ",\n";
+    out << "        \"synchronization_model\": ";
+    write_json_string(out, r.metadata.synchronization_model);
+    out << ",\n";
+    out << "        \"transport_provider\": ";
+    write_json_string(out, r.metadata.transport_provider);
+    out << ",\n";
     out << "        \"device_map\": ";
     write_json_string(out, r.metadata.device_map);
     out << ",\n";
@@ -280,6 +367,9 @@ void write_json(const std::string& path,
       out << ",\n";
       out << "          \"aggregation\": ";
       write_json_string(out, r.metadata.phase_timing_aggregation);
+      out << ",\n";
+      out << "          \"synchronization_model\": ";
+      write_json_string(out, r.metadata.synchronization_model);
       out << "\n";
       out << "        },\n";
     }
@@ -328,20 +418,32 @@ void write_json(const std::string& path,
           << phase.input_device_copy_seconds << ",\n";
       out << "        \"north_south_mpi_seconds\": "
           << phase.north_south_mpi_seconds << ",\n";
+      out << "        \"north_south_communication_seconds\": "
+          << phase.north_south_communication_seconds << ",\n";
       out << "        \"north_south_sync_seconds\": "
           << phase.north_south_sync_seconds << ",\n";
       out << "        \"transpose_device_copy_seconds\": "
           << phase.transpose_device_copy_seconds << ",\n";
+      out << "        \"transpose_copy_seconds\": "
+          << phase.transpose_copy_seconds << ",\n";
       out << "        \"transpose_copy_sync_seconds\": "
           << phase.transpose_copy_sync_seconds << ",\n";
+      out << "        \"transpose_sync_seconds\": "
+          << phase.transpose_sync_seconds << ",\n";
       out << "        \"east_west_mpi_seconds\": "
           << phase.east_west_mpi_seconds << ",\n";
+      out << "        \"east_west_communication_seconds\": "
+          << phase.east_west_communication_seconds << ",\n";
       out << "        \"east_west_sync_seconds\": "
           << phase.east_west_sync_seconds << ",\n";
       out << "        \"phase_sum_seconds\": " << phase.phase_sum_seconds
           << ",\n";
       out << "        \"unattributed_seconds\": "
-          << phase.unattributed_seconds << "\n";
+          << phase.unattributed_seconds << ",\n";
+      out << "        \"total_exchange_seconds\": "
+          << phase_total_exchange(phase, r) << ",\n";
+      out << "        \"total_minus_sum_of_phase_maxima_seconds\": "
+          << phase_total_minus_sum(phase) << "\n";
       out << "      }\n";
     }
     out << "    }" << (i + 1 == results.size() ? "" : ",") << "\n";

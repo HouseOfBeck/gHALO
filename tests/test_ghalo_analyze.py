@@ -85,6 +85,7 @@ def write_result_dir(
     ranks_per_node_metadata=None,
     metadata_files=None,
     timings=None,
+    phase_timing=None,
 ) -> Path:
     path = root / name
     path.mkdir(parents=True)
@@ -99,34 +100,35 @@ def write_result_dir(
             metadata["nodes"] = nodes_metadata
         if ranks_per_node_metadata is not None:
             metadata["ranks_per_node"] = ranks_per_node_metadata
-        results.append(
-            {
-                "backend": backend,
-                "algorithm": "mpi-hip-sendrecv" if "HIP" in backend else "mpi-sendrecv",
-                "halo_words": halo,
-                "word_bytes": 4,
-                "n_message_bytes": halo * 4,
-                "two_n_message_bytes": halo * 8,
-                "total_exchange_bytes_per_rank": halo * 24,
-                "iterations": 100,
-                "max_total_seconds": seconds * 100,
-                "max_average_seconds": seconds,
-                "metadata": metadata,
-                "topology": {
-                    "world_size": ranks,
-                    "world_rank": 0,
-                    "cart_rank": 0,
-                    "rows": rows,
-                    "cols": cols,
-                    "row": 0,
-                    "col": 0,
-                    "north": cols,
-                    "south": cols,
-                    "east": 1,
-                    "west": cols - 1,
-                },
-            }
-        )
+        result = {
+            "backend": backend,
+            "algorithm": "mpi-hip-sendrecv" if "HIP" in backend else "mpi-sendrecv",
+            "halo_words": halo,
+            "word_bytes": 4,
+            "n_message_bytes": halo * 4,
+            "two_n_message_bytes": halo * 8,
+            "total_exchange_bytes_per_rank": halo * 24,
+            "iterations": 100,
+            "max_total_seconds": seconds * 100,
+            "max_average_seconds": seconds,
+            "metadata": metadata,
+            "topology": {
+                "world_size": ranks,
+                "world_rank": 0,
+                "cart_rank": 0,
+                "rows": rows,
+                "cols": cols,
+                "row": 0,
+                "col": 0,
+                "north": cols,
+                "south": cols,
+                "east": 1,
+                "west": cols - 1,
+            },
+        }
+        if phase_timing is not None:
+            result["phase_timing"] = phase_timing
+        results.append(result)
     (path / "ghalo.json").write_text(
         json.dumps({"version": "0.3.0", "results": results}),
         encoding="utf-8",
@@ -339,6 +341,7 @@ class GhaloAnalyzeTests(unittest.TestCase):
         result = run.results[0]
         categories = analyze.phase_categories(result)
         self.assertAlmostEqual(categories["device_copy_total_seconds"], 0.000004)
+        self.assertAlmostEqual(categories["communication_total_seconds"], 0.000007)
         self.assertAlmostEqual(categories["mpi_total_seconds"], 0.000007)
         self.assertAlmostEqual(categories["synchronization_total_seconds"], 0.000003)
         self.assertLess(categories["total_minus_sum_of_phase_maxima_seconds"], 0.0)
@@ -346,6 +349,42 @@ class GhaloAnalyzeTests(unittest.TestCase):
         self.assertIn("phase_phase_sum_seconds", rows[0])
         labeled = analyze.summary_rows(run, label_override="explicit")
         self.assertEqual(labeled[0]["label"], "explicit")
+
+    def test_rccl_phase_category_calculation(self) -> None:
+        phase = {
+            "north_south_communication_seconds": 0.000002,
+            "north_south_sync_seconds": 0.000001,
+            "transpose_copy_seconds": 0.000003,
+            "transpose_sync_seconds": 0.000001,
+            "east_west_communication_seconds": 0.000004,
+            "east_west_sync_seconds": 0.000002,
+            "phase_sum_seconds": 0.000013,
+            "total_exchange_seconds": 0.000010,
+            "total_minus_sum_of_phase_maxima_seconds": -0.000003,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            run = analyze.load_run(
+                str(
+                    write_result_dir(
+                        Path(tmp),
+                        "rccl-phase",
+                        backend="RCCLBackend",
+                        phase_timing=phase,
+                        timings={2: 0.000010},
+                    )
+                )
+            )
+        result = run.results[0]
+        categories = analyze.phase_categories(result)
+        self.assertAlmostEqual(categories["communication_total_seconds"], 0.000006)
+        self.assertAlmostEqual(categories["mpi_total_seconds"], 0.0)
+        self.assertAlmostEqual(categories["device_copy_total_seconds"], 0.000003)
+        self.assertAlmostEqual(categories["synchronization_total_seconds"], 0.000004)
+        self.assertAlmostEqual(
+            categories["total_minus_sum_of_phase_maxima_seconds"], -0.000003
+        )
+        rows = analyze.summary_rows(run, phase_timing=True)
+        self.assertIn("phase_north_south_communication_seconds", rows[0])
 
     def test_concise_labels_and_borg_active_system(self) -> None:
         frontier = analyze.load_run(str(DATA / "repeat_a"))

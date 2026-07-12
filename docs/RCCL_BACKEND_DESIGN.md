@@ -128,8 +128,12 @@ where stream ordering is sufficient. Correctness-first stream synchronization
 may be used initially, but each host synchronization point must be documented.
 RCCL work must be complete before a timed exchange is considered complete.
 
-Phase timing is not part of the first RCCL implementation. It may be added
-after the full two-stage halo exchange is correct.
+RCCL phase timing is implemented as a diagnostic mode. It records grouped
+north/south RCCL work, the north/south stream synchronization, the intermediate
+device copy, the copy synchronization, grouped east/west RCCL work, and the
+final stream synchronization. The implementation keeps the correctness-first
+stream synchronizations in place; they may later be replaced by a lower-overhead
+stream-aware mechanism only after correctness is preserved.
 
 ## Message Ordering And Deadlock Safety
 
@@ -174,8 +178,10 @@ The primary metric remains the complete HALO-compatible exchange time:
 - the reported value is the maximum average wall-clock time across ranks.
 
 RCCL communication and stream work required for the exchange must be complete
-before timing stops. The backend may later report RCCL phase timing, but that
-must be documented as diagnostic and must not replace the primary metric.
+before timing stops. Optional RCCL phase timing is diagnostic and does not
+replace the primary metric. Each phase is locally averaged and independently
+reduced with `MPI_MAX`, matching the MPI-HIP phase timing aggregation model.
+The phase sum is not forced to match the total exchange maximum.
 
 ## Error Handling
 
@@ -227,13 +233,13 @@ Stage C: full two-stage halo correctness.
 - Implemented as the default `--backend rccl` path.
 - Uses correctness-first stream synchronization after north/south RCCL, after
   the intermediate device copy, and after east/west RCCL.
-- Does not yet implement RCCL phase timing, synchronization optimization,
-  persistent/alternate RCCL strategies, scaling comparison against MPI-HIP, or
-  production performance claims.
+- Does not claim synchronization optimization, persistent/alternate RCCL
+  strategies, scaling comparison against MPI-HIP, or production performance.
 
 Stage D: phase timing and comparison.
 
-- Add RCCL diagnostic phase timing.
+- Add RCCL diagnostic phase timing. This is implemented for the full Stage C
+  path with `--phase-timing`.
 - Compare complete-exchange and phase behavior against `mpi-hip`.
 
 Stage E: Borg scaling, then Frontier scaling.

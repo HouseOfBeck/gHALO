@@ -493,8 +493,16 @@ PhaseTimingResult MPIHIPBackend::phase_timing_result(int iterations,
       reduced_phase_average(phase_timing_.east_west_mpi_seconds, iterations);
   result.east_west_sync_seconds =
       reduced_phase_average(phase_timing_.east_west_sync_seconds, iterations);
+  result.north_south_communication_seconds =
+      result.north_south_mpi_seconds;
+  result.transpose_copy_seconds = result.transpose_device_copy_seconds;
+  result.transpose_sync_seconds = result.transpose_copy_sync_seconds;
+  result.east_west_communication_seconds = result.east_west_mpi_seconds;
   result.phase_sum_seconds = phase_timing_sum(result);
   result.unattributed_seconds = total_seconds - result.phase_sum_seconds;
+  result.total_exchange_seconds = total_seconds;
+  result.total_minus_sum_of_phase_maxima_seconds =
+      result.unattributed_seconds;
   return result;
 }
 

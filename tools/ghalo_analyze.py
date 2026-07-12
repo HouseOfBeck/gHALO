@@ -32,13 +32,38 @@ REQUIRED_FIELDS = (
 PHASE_FIELDS = (
     "input_device_copy_seconds",
     "north_south_mpi_seconds",
+    "north_south_communication_seconds",
+    "north_south_sync_seconds",
+    "transpose_device_copy_seconds",
+    "transpose_copy_seconds",
+    "transpose_copy_sync_seconds",
+    "transpose_sync_seconds",
+    "east_west_mpi_seconds",
+    "east_west_communication_seconds",
+    "east_west_sync_seconds",
+    "phase_sum_seconds",
+    "unattributed_seconds",
+    "total_exchange_seconds",
+    "total_minus_sum_of_phase_maxima_seconds",
+)
+
+MPI_HIP_PHASE_PLOT_FIELDS = (
+    "input_device_copy_seconds",
+    "north_south_mpi_seconds",
     "north_south_sync_seconds",
     "transpose_device_copy_seconds",
     "transpose_copy_sync_seconds",
     "east_west_mpi_seconds",
     "east_west_sync_seconds",
-    "phase_sum_seconds",
-    "unattributed_seconds",
+)
+
+GENERIC_PHASE_PLOT_FIELDS = (
+    "north_south_communication_seconds",
+    "north_south_sync_seconds",
+    "transpose_copy_seconds",
+    "transpose_sync_seconds",
+    "east_west_communication_seconds",
+    "east_west_sync_seconds",
 )
 
 
@@ -557,26 +582,61 @@ def effective_gib_per_second(result: RunResult) -> float:
 
 def phase_categories(result: RunResult) -> Dict[str, float]:
     phase = result.phase_timing or {}
+    has_generic_phase = any(
+        abs(phase.get(name, 0.0)) > 0.0
+        for name in (
+            "north_south_communication_seconds",
+            "transpose_copy_seconds",
+            "transpose_sync_seconds",
+            "east_west_communication_seconds",
+            "total_exchange_seconds",
+        )
+    )
+    north_south_communication = (
+        phase.get("north_south_communication_seconds", 0.0)
+        or phase.get("north_south_mpi_seconds", 0.0)
+    )
+    transpose_copy = (
+        phase.get("transpose_copy_seconds", 0.0)
+        or phase.get("transpose_device_copy_seconds", 0.0)
+    )
+    transpose_sync = (
+        phase.get("transpose_sync_seconds", 0.0)
+        or phase.get("transpose_copy_sync_seconds", 0.0)
+    )
+    east_west_communication = (
+        phase.get("east_west_communication_seconds", 0.0)
+        or phase.get("east_west_mpi_seconds", 0.0)
+    )
     device_copy = (
         phase.get("input_device_copy_seconds", 0.0)
-        + phase.get("transpose_device_copy_seconds", 0.0)
+        + transpose_copy
     )
     mpi = (
         phase.get("north_south_mpi_seconds", 0.0)
         + phase.get("east_west_mpi_seconds", 0.0)
     )
+    communication = north_south_communication + east_west_communication
     sync = (
         phase.get("north_south_sync_seconds", 0.0)
-        + phase.get("transpose_copy_sync_seconds", 0.0)
+        + transpose_sync
         + phase.get("east_west_sync_seconds", 0.0)
     )
     return {
         "device_copy_total_seconds": device_copy,
+        "communication_total_seconds": communication,
         "mpi_total_seconds": mpi,
         "synchronization_total_seconds": sync,
-        "total_minus_sum_of_phase_maxima_seconds": phase.get(
-            "unattributed_seconds",
-            result.max_average_seconds - phase.get("phase_sum_seconds", 0.0),
+        "total_minus_sum_of_phase_maxima_seconds": (
+            phase.get(
+                "total_minus_sum_of_phase_maxima_seconds",
+                result.max_average_seconds - phase.get("phase_sum_seconds", 0.0),
+            )
+            if has_generic_phase
+            else phase.get(
+                "unattributed_seconds",
+                result.max_average_seconds - phase.get("phase_sum_seconds", 0.0),
+            )
         ),
     }
 
@@ -1324,7 +1384,22 @@ def command_plot(args: argparse.Namespace) -> int:
             raise AnalysisError("phase plot requires a run with phase_timing results")
         labels = [str(result.halo_words) for result in phase_results]
         bottoms = [0.0 for _ in phase_results]
-        for name in PHASE_FIELDS[:7]:
+        first_phase = phase_results[0].phase_timing or {}
+        first_result = phase_results[0]
+        is_generic_backend = (
+            "rccl" in first_result.backend.lower()
+            or "rccl" in first_result.algorithm.lower()
+        )
+        phase_plot_fields = (
+            GENERIC_PHASE_PLOT_FIELDS
+            if is_generic_backend
+            or any(
+                abs(first_phase.get(name, 0.0)) > 0.0
+                for name in GENERIC_PHASE_PLOT_FIELDS
+            )
+            else MPI_HIP_PHASE_PLOT_FIELDS
+        )
+        for name in phase_plot_fields:
             values = [result.phase_timing.get(name, 0.0) * 1.0e6 for result in phase_results]  # type: ignore[union-attr]
             ax.bar(labels, values, bottom=bottoms, label=name)
             bottoms = [bottom + value for bottom, value in zip(bottoms, values)]

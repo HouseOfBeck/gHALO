@@ -1,8 +1,8 @@
 # Phase Timing
 
-Phase timing is an optional diagnostic mode for the `mpi-hip` backend. It helps
-attribute the time spent inside one GPU-aware MPI halo exchange to device
-copies, MPI communication, and synchronization boundaries.
+Phase timing is an optional diagnostic mode for GPU-resident backends. It helps
+attribute the time spent inside one halo exchange to communication, device
+copies, and synchronization boundaries.
 
 Phase timing does not replace the primary gHALO metric. The authoritative
 benchmark result remains the maximum average wall-clock time per complete halo
@@ -73,6 +73,22 @@ For each timed exchange iteration, the `mpi-hip` backend records:
 The implementation does not add synchronization solely for measurement. It
 measures synchronization calls that already exist for correctness.
 
+For each timed exchange iteration, the `rccl` backend records:
+
+- `north_south_communication`: grouped RCCL sends and receives for the
+  north-south `N` and `2N` segments.
+- `north_south_sync`: the stream synchronization after north-south RCCL.
+- `transpose_copy`: the device-to-device copy from `hons` to `hiew`.
+- `transpose_sync`: the stream synchronization after the transpose copy.
+- `east_west_communication`: grouped RCCL sends and receives for the east-west
+  `N` and `2N` segments.
+- `east_west_sync`: the stream synchronization after east-west RCCL.
+
+The initial RCCL implementation intentionally keeps correctness-first
+`hipStreamSynchronize` calls at the three visibility boundaries. These
+synchronizations may later be replaced by a lower-overhead stream-aware
+mechanism, but they must not be removed merely to improve benchmark numbers.
+
 ## Aggregation
 
 For each halo size and phase, gHALO:
@@ -87,12 +103,15 @@ application-visible progress.
 The output also reports:
 
 - `phase_sum_seconds`: the sum of the reduced phase averages;
-- `unattributed_seconds`: `max_average_exchange_seconds - phase_sum_seconds`.
+- `total_exchange_seconds`: the primary maximum average complete-exchange
+  time;
+- `total_minus_sum_of_phase_maxima_seconds`:
+  `total_exchange_seconds - phase_sum_seconds`.
 
-Small positive or negative unattributed values are expected. The complete
-exchange and the individual phases are timed separately, and phase timings are
-independently reduced with `MPI_MAX`. gHALO does not adjust phase values to
-force the sum to equal the total.
+Small positive or negative total-minus-phase-sum values are expected. The
+complete exchange and the individual phases are timed separately, and phase
+timings are independently reduced with `MPI_MAX`. gHALO does not adjust phase
+values to force the sum to equal the total.
 
 ## Output
 
@@ -104,9 +123,15 @@ When phase timing is enabled:
 - console output prints the normal result table first, then a second phase
   table in microseconds;
 - CSV output adds phase columns such as
-  `phase_input_device_copy_seconds` and `phase_unattributed_seconds`;
+  `phase_north_south_communication_seconds` and
+  `phase_total_minus_sum_of_phase_maxima_seconds`;
 - JSON output adds a per-result `phase_timing` object and metadata describing
   the timing source and aggregation policy.
+
+The older MPI-HIP-specific field names, such as `north_south_mpi_seconds`, are
+retained for compatibility. RCCL communication is serialized with neutral
+`*_communication_seconds` names so analysis and reporting do not mislabel RCCL
+transfers as MPI.
 
 ## Performance Caution
 

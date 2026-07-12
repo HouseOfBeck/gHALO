@@ -44,11 +44,25 @@ public:
   double max_time(double local_seconds) override;
   void run_development_validation(
       const std::vector<std::size_t>& halo_lengths) override;
+  bool supports_phase_timing() const override;
+  void set_phase_timing_enabled(bool enabled) override;
+  bool phase_timing_enabled() const override;
+  void reset_phase_timing() override;
+  PhaseTimingResult phase_timing_result(int iterations,
+                                        double total_seconds) override;
 
   bool exchange_implemented() const;
 
 private:
   class DeviceBuffer;
+  struct PhaseTimingAccumulator {
+    double north_south_communication_seconds{};
+    double north_south_sync_seconds{};
+    double transpose_copy_seconds{};
+    double transpose_sync_seconds{};
+    double east_west_communication_seconds{};
+    double east_west_sync_seconds{};
+  };
 
   void initialize_topology();
   void initialize_local_rank();
@@ -59,11 +73,18 @@ private:
   void fill_pattern();
   void fill_rank();
   void copy_hoew_to_hins();
+  void enqueue_north_south();
   void exchange_north_south();
+  void enqueue_hons_to_hiew_copy();
   void copy_hons_to_hiew();
+  void enqueue_east_west();
   void exchange_east_west();
+  void synchronize_stream(const char* operation);
+  double reduced_phase_average(double local_total_seconds,
+                               int iterations) const;
   void validate_north_south();
   void validate_full_exchange();
+  void print_validation_summary() const;
   void print_startup() const;
   void hip_check(hipError_t error, const char* operation) const;
   void rccl_check(ncclResult_t error, const char* operation) const;
@@ -79,6 +100,11 @@ private:
   bool validate_ = true;
   bool allow_oversubscription_ = false;
   bool stage_b_only_ = false;
+  bool phase_timing_enabled_ = false;
+  bool phase_timing_collecting_ = false;
+  bool validation_failed_ = false;
+  mutable bool validation_summary_printed_ = false;
+  int validated_halo_count_ = 0;
   int visible_device_count_ = 0;
   int local_rank_ = 0;
   int local_size_ = 1;
@@ -90,6 +116,7 @@ private:
   std::unique_ptr<DeviceBuffer> hons_;
   std::unique_ptr<DeviceBuffer> hiew_;
   std::unique_ptr<DeviceBuffer> hoew_;
+  PhaseTimingAccumulator phase_timing_;
 };
 
 } // namespace ghalo

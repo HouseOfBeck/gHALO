@@ -83,8 +83,8 @@ future implementation explicitly shares that path:
 
 The RCCL backend is experimental. The default path runs the full
 two-dimensional halo exchange with correctness-first stream synchronization.
-It does not yet implement RCCL phase timing, synchronization optimization, or
-performance-comparison claims.
+It implements diagnostic RCCL phase timing, but does not yet claim
+synchronization optimization or production performance comparisons.
 
 Machine-specific CMake additions come from
 `scripts/systems/<system-name>.sh`. The portable script does not hard-code
@@ -554,5 +554,5 @@ results/*
 The exception allows future curated reference results to be tracked under
 `results/reference/` without accidentally tracking routine benchmark output.
 `rccl` is accepted by the workflow for experimental full-exchange correctness
-runs. Treat timing results as bring-up data until RCCL phase timing and
-synchronization policy have been studied.
+runs. Treat timing results as bring-up data until RCCL synchronization policy
+and performance behavior have been studied.

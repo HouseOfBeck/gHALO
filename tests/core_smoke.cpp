@@ -257,6 +257,15 @@ void test_phase_sum_calculation() {
   phase.east_west_mpi_seconds = 6.0;
   phase.east_west_sync_seconds = 7.0;
   assert(ghalo::phase_timing_sum(phase) == 28.0);
+
+  ghalo::PhaseTimingResult generic_phase;
+  generic_phase.north_south_communication_seconds = 1.0;
+  generic_phase.north_south_sync_seconds = 2.0;
+  generic_phase.transpose_copy_seconds = 3.0;
+  generic_phase.transpose_sync_seconds = 4.0;
+  generic_phase.east_west_communication_seconds = 5.0;
+  generic_phase.east_west_sync_seconds = 6.0;
+  assert(ghalo::phase_timing_sum(generic_phase) == 21.0);
 }
 
 void test_unsupported_phase_timing() {
@@ -362,7 +371,8 @@ void test_output_with_phase_timing() {
   std::ostringstream console;
   ghalo::write_console(console, results);
   assert(console.str().find("MPI-HIP phase timing") != std::string::npos);
-  assert(console.str().find("unattributed_us") != std::string::npos);
+  assert(console.str().find("input_copy_us") != std::string::npos);
+  assert(console.str().find("total_minus_sum_us") != std::string::npos);
 
   const auto csv_path = temp.file("ghalo_core_smoke_phase.csv");
   ghalo::write_csv(csv_path.string(), results);
@@ -379,6 +389,58 @@ void test_output_with_phase_timing() {
   assert(json.find("\"phase_sum_seconds\"") != std::string::npos);
 }
 
+void test_output_with_rccl_phase_timing() {
+  auto result = sample_result();
+  result.backend = "RCCLBackend";
+  result.algorithm = "rccl";
+  result.metadata.rccl_version = "20400";
+  result.metadata.synchronization_model = "three_stream_synchronizations";
+  ghalo::PhaseTimingResult phase;
+  phase.north_south_communication_seconds = 0.002;
+  phase.north_south_sync_seconds = 0.001;
+  phase.transpose_copy_seconds = 0.003;
+  phase.transpose_sync_seconds = 0.001;
+  phase.east_west_communication_seconds = 0.004;
+  phase.east_west_sync_seconds = 0.002;
+  phase.phase_sum_seconds = ghalo::phase_timing_sum(phase);
+  phase.total_exchange_seconds = 0.01;
+  phase.total_minus_sum_of_phase_maxima_seconds =
+      phase.total_exchange_seconds - phase.phase_sum_seconds;
+  phase.unattributed_seconds = phase.total_minus_sum_of_phase_maxima_seconds;
+  result.phase_timing = phase;
+  result.metadata.phase_timing_enabled = true;
+  result.metadata.phase_timing_source = "MPI_Wtime";
+  result.metadata.phase_timing_aggregation =
+      "maximum local average across ranks";
+
+  const std::vector<ghalo::BenchmarkResult> results{result};
+  ScopedTempDirectory temp;
+
+  std::ostringstream console;
+  ghalo::write_console(console, results);
+  assert(console.str().find("RCCL phase timing") != std::string::npos);
+  assert(console.str().find("ns_comm_us") != std::string::npos);
+  assert(console.str().find("input_copy_us") == std::string::npos);
+
+  const auto csv_path = temp.file("ghalo_core_smoke_rccl_phase.csv");
+  ghalo::write_csv(csv_path.string(), results);
+  const std::string csv = read_file(csv_path);
+  assert(csv.find("phase_north_south_communication_seconds") !=
+         std::string::npos);
+  assert(csv.find("phase_total_minus_sum_of_phase_maxima_seconds") !=
+         std::string::npos);
+
+  const auto json_path = temp.file("ghalo_core_smoke_rccl_phase.json");
+  ghalo::write_json(json_path.string(), results);
+  const std::string json = read_file(json_path);
+  assert(json.find("\"north_south_communication_seconds\"") !=
+         std::string::npos);
+  assert(json.find("\"total_minus_sum_of_phase_maxima_seconds\"") !=
+         std::string::npos);
+  assert(json.find("\"synchronization_model\": "
+                   "\"three_stream_synchronizations\"") != std::string::npos);
+}
+
 } // namespace
 
 int main() {
@@ -393,6 +455,7 @@ int main() {
   test_development_validation_refusal();
   test_output_without_phase_timing_is_unchanged();
   test_output_with_phase_timing();
+  test_output_with_rccl_phase_timing();
 
   MockBackend backend;
   ghalo::BenchmarkConfig config;

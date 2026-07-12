@@ -360,12 +360,12 @@ python3 tools/ghalo_analyze.py summarize \
 
 The analyzer reports:
 
-- input device copy;
-- north/south MPI;
+- input device copy when present;
+- north/south communication;
 - north/south synchronization;
 - transpose device copy;
 - transpose synchronization;
-- east/west MPI;
+- east/west communication;
 - east/west synchronization;
 - phase sum;
 - total;
@@ -374,7 +374,8 @@ The analyzer reports:
 It also derives broad categories:
 
 - device-copy total;
-- MPI total;
+- communication total;
+- MPI total for older MPI-HIP fields;
 - synchronization total;
 - `total_minus_sum_of_phase_maxima_seconds`.
 

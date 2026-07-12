@@ -55,12 +55,14 @@ backends and one experimental backend scaffold:
 - `mpi-hip`: AMD HIP device-memory backend using GPU-aware MPI.
 - `rccl`: experimental RCCL backend with communicator initialization, HIP
   stream ownership, north/south exchange, intermediate device copy, east/west
-  exchange, full validation, and normal complete-exchange timing.
+  exchange, full validation, normal complete-exchange timing, and diagnostic
+  phase timing.
 
 The `mpi-hip` backend has been validated on Frontier with Cray MPICH, AMD GPUs,
 correctness validation, JSON/CSV output, metadata capture, phase timing, and
-post-run analysis tooling. RCCL phase timing, synchronization optimization,
-UCX, heat maps, and automated cluster-health diagnostics remain planned work.
+post-run analysis tooling. RCCL synchronization optimization, production
+performance characterization, UCX, heat maps, and automated cluster-health
+diagnostics remain planned work.
 
 The development model assumes:
 
@@ -249,10 +251,12 @@ GHALO_SYSTEM_NAME=frontier scripts/submit.sh \
 GitHub Actions validate portable CPU-only, OpenMPI, and shell workflow paths.
 See [Continuous Integration](docs/CI.md).
 
-The `mpi-hip` backend also supports optional diagnostic phase timing:
+The `mpi-hip` and full `rccl` backends also support optional diagnostic phase
+timing:
 
 ```sh
 ghalo --backend mpi-hip --phase-timing
+ghalo --backend rccl --phase-timing
 ```
 
 See [Phase Timing](docs/PHASE_TIMING.md).

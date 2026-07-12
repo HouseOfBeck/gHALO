@@ -44,6 +44,8 @@ struct BackendMetadata {
   std::string device_map;
   std::string phase_timing_source;
   std::string phase_timing_aggregation;
+  std::string synchronization_model;
+  std::string transport_provider;
   bool gpu_aware_mpi_requested = false;
   bool validation_enabled = false;
   bool validation_passed = false;
@@ -54,16 +56,35 @@ struct BackendMetadata {
 struct PhaseTimingResult {
   double input_device_copy_seconds{};
   double north_south_mpi_seconds{};
+  double north_south_communication_seconds{};
   double north_south_sync_seconds{};
   double transpose_device_copy_seconds{};
+  double transpose_copy_seconds{};
   double transpose_copy_sync_seconds{};
+  double transpose_sync_seconds{};
   double east_west_mpi_seconds{};
+  double east_west_communication_seconds{};
   double east_west_sync_seconds{};
   double phase_sum_seconds{};
   double unattributed_seconds{};
+  double total_exchange_seconds{};
+  double total_minus_sum_of_phase_maxima_seconds{};
 };
 
 inline double phase_timing_sum(const PhaseTimingResult& phase) {
+  const bool has_generic_fields =
+      phase.north_south_communication_seconds != 0.0 ||
+      phase.transpose_copy_seconds != 0.0 ||
+      phase.transpose_sync_seconds != 0.0 ||
+      phase.east_west_communication_seconds != 0.0;
+  if (has_generic_fields) {
+    return phase.input_device_copy_seconds +
+           phase.north_south_communication_seconds +
+           phase.north_south_sync_seconds + phase.transpose_copy_seconds +
+           phase.transpose_sync_seconds +
+           phase.east_west_communication_seconds +
+           phase.east_west_sync_seconds;
+  }
   return phase.input_device_copy_seconds + phase.north_south_mpi_seconds +
          phase.north_south_sync_seconds +
          phase.transpose_device_copy_seconds +

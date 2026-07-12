@@ -201,6 +201,7 @@ RCCLBackend::RCCLBackend(bool validate, bool allow_oversubscription,
 }
 
 RCCLBackend::~RCCLBackend() {
+  print_validation_summary();
   if (stream_ != nullptr) {
     (void)hipStreamSynchronize(stream_);
   }
@@ -261,9 +262,39 @@ void RCCLBackend::exchange() {
     fail_not_implemented();
   }
   copy_hoew_to_hins();
-  exchange_north_south();
-  copy_hons_to_hiew();
-  exchange_east_west();
+  if (!phase_timing_collecting_) {
+    exchange_north_south();
+    copy_hons_to_hiew();
+    exchange_east_west();
+    return;
+  }
+
+  double start = now();
+  enqueue_north_south();
+  phase_timing_.north_south_communication_seconds += now() - start;
+
+  // Keep the initial RCCL backend correctness-first: RCCL completion on the
+  // stream is the synchronization relationship before HIP reads hons_, and
+  // before RCCL later reads hiew_ after the transpose copy.
+  start = now();
+  synchronize_stream("hipStreamSynchronize after north/south RCCL");
+  phase_timing_.north_south_sync_seconds += now() - start;
+
+  start = now();
+  enqueue_hons_to_hiew_copy();
+  phase_timing_.transpose_copy_seconds += now() - start;
+
+  start = now();
+  synchronize_stream("hipStreamSynchronize after hons -> hiew");
+  phase_timing_.transpose_sync_seconds += now() - start;
+
+  start = now();
+  enqueue_east_west();
+  phase_timing_.east_west_communication_seconds += now() - start;
+
+  start = now();
+  synchronize_stream("hipStreamSynchronize after east/west RCCL");
+  phase_timing_.east_west_sync_seconds += now() - start;
 }
 
 void RCCLBackend::barrier() {
@@ -309,6 +340,65 @@ void RCCLBackend::run_development_validation(
 }
 
 bool RCCLBackend::exchange_implemented() const { return !stage_b_only_; }
+
+bool RCCLBackend::supports_phase_timing() const { return !stage_b_only_; }
+
+void RCCLBackend::set_phase_timing_enabled(bool enabled) {
+  if (enabled && stage_b_only_) {
+    throw std::runtime_error(
+        "phase timing is not supported by RCCL Stage B debug mode");
+  }
+  phase_timing_enabled_ = enabled;
+  metadata_.phase_timing_enabled = enabled;
+  if (enabled) {
+    metadata_.phase_timing_source = "MPI_Wtime";
+    metadata_.phase_timing_aggregation = "maximum local average across ranks";
+  } else {
+    metadata_.phase_timing_source.clear();
+    metadata_.phase_timing_aggregation.clear();
+    phase_timing_collecting_ = false;
+  }
+}
+
+bool RCCLBackend::phase_timing_enabled() const {
+  return phase_timing_enabled_;
+}
+
+void RCCLBackend::reset_phase_timing() {
+  phase_timing_ = {};
+  phase_timing_collecting_ = phase_timing_enabled_;
+}
+
+PhaseTimingResult RCCLBackend::phase_timing_result(int iterations,
+                                                   double total_seconds) {
+  if (iterations <= 0) {
+    throw std::invalid_argument("phase timing iterations must be positive");
+  }
+  phase_timing_collecting_ = false;
+
+  PhaseTimingResult result;
+  result.north_south_communication_seconds = reduced_phase_average(
+      phase_timing_.north_south_communication_seconds, iterations);
+  result.north_south_sync_seconds =
+      reduced_phase_average(phase_timing_.north_south_sync_seconds,
+                            iterations);
+  result.transpose_copy_seconds =
+      reduced_phase_average(phase_timing_.transpose_copy_seconds, iterations);
+  result.transpose_sync_seconds =
+      reduced_phase_average(phase_timing_.transpose_sync_seconds, iterations);
+  result.east_west_communication_seconds =
+      reduced_phase_average(phase_timing_.east_west_communication_seconds,
+                            iterations);
+  result.east_west_sync_seconds =
+      reduced_phase_average(phase_timing_.east_west_sync_seconds, iterations);
+  result.phase_sum_seconds = phase_timing_sum(result);
+  result.total_exchange_seconds = total_seconds;
+  result.total_minus_sum_of_phase_maxima_seconds =
+      total_seconds - result.phase_sum_seconds;
+  result.unattributed_seconds =
+      result.total_minus_sum_of_phase_maxima_seconds;
+  return result;
+}
 
 void RCCLBackend::initialize_topology() {
   mpi_check(MPI_Comm_rank(MPI_COMM_WORLD, &topology_.world_rank),
@@ -427,11 +517,15 @@ void RCCLBackend::initialize_metadata() {
   metadata_.validation_enabled = validate_;
   metadata_.validation_passed = !validate_;
   metadata_.rccl_stage = stage_b_only_ ? "north-south-only" : "full";
+  metadata_.synchronization_model =
+      stage_b_only_ ? "single_stream_synchronization"
+                    : "three_stream_synchronizations";
   metadata_.hip_runtime_version =
       hip_runtime_version(rank(), local_rank_, selected_device_);
   metadata_.rccl_version = rccl_version(rank(), local_rank_, selected_device_);
   metadata_.rocm_version = rocm_version();
   metadata_.rccl_plugin_root = getenv_string("OLCF_OFI_NCCL_ROOT");
+  metadata_.transport_provider = getenv_string("FI_PROVIDER");
 
   int version_length = 0;
   char version[MPI_MAX_LIBRARY_VERSION_STRING] = {};
@@ -553,7 +647,7 @@ void RCCLBackend::copy_hoew_to_hins() {
             "hipStreamSynchronize after hoew -> hins");
 }
 
-void RCCLBackend::exchange_north_south() {
+void RCCLBackend::enqueue_north_south() {
   const std::size_t n = halo_words_;
   const std::size_t two_n = 2 * halo_words_;
   const std::size_t n_offset = halo_n_offset();
@@ -579,19 +673,25 @@ void RCCLBackend::exchange_north_south() {
                       rccl_comm_, stream_),
              "ncclRecv north/south 2N");
   rccl_check(ncclGroupEnd(), "ncclGroupEnd north/south");
-  hip_check(hipStreamSynchronize(stream_),
-            "hipStreamSynchronize after north/south RCCL");
 }
 
-void RCCLBackend::copy_hons_to_hiew() {
+void RCCLBackend::exchange_north_south() {
+  enqueue_north_south();
+  synchronize_stream("hipStreamSynchronize after north/south RCCL");
+}
+
+void RCCLBackend::enqueue_hons_to_hiew_copy() {
   hip_check(hipMemcpyAsync(hiew_->data(), hons_->data(), hons_->bytes(),
                            hipMemcpyDeviceToDevice, stream_),
             "hipMemcpyAsync hons -> hiew");
-  hip_check(hipStreamSynchronize(stream_),
-            "hipStreamSynchronize after hons -> hiew");
 }
 
-void RCCLBackend::exchange_east_west() {
+void RCCLBackend::copy_hons_to_hiew() {
+  enqueue_hons_to_hiew_copy();
+  synchronize_stream("hipStreamSynchronize after hons -> hiew");
+}
+
+void RCCLBackend::enqueue_east_west() {
   const std::size_t n = halo_words_;
   const std::size_t two_n = 2 * halo_words_;
   const std::size_t n_offset = halo_n_offset();
@@ -617,8 +717,26 @@ void RCCLBackend::exchange_east_west() {
                       rccl_comm_, stream_),
              "ncclRecv east/west 2N");
   rccl_check(ncclGroupEnd(), "ncclGroupEnd east/west");
-  hip_check(hipStreamSynchronize(stream_),
-            "hipStreamSynchronize after east/west RCCL");
+}
+
+void RCCLBackend::exchange_east_west() {
+  enqueue_east_west();
+  synchronize_stream("hipStreamSynchronize after east/west RCCL");
+}
+
+void RCCLBackend::synchronize_stream(const char* operation) {
+  hip_check(hipStreamSynchronize(stream_), operation);
+}
+
+double RCCLBackend::reduced_phase_average(double local_total_seconds,
+                                          int iterations) const {
+  const double local_average =
+      local_total_seconds / static_cast<double>(iterations);
+  double global_average = 0.0;
+  mpi_check(MPI_Allreduce(&local_average, &global_average, 1, MPI_DOUBLE,
+                          MPI_MAX, cart_comm_),
+            "MPI_Allreduce RCCL phase timing");
+  return global_average;
 }
 
 void RCCLBackend::validate_north_south() {
@@ -679,9 +797,11 @@ void RCCLBackend::validate_north_south() {
                           cart_comm_),
             "MPI_Allreduce RCCL north/south validation");
   if (global_ok != 1) {
+    validation_failed_ = true;
     throw std::runtime_error("RCCL north/south validation failed");
   }
   metadata_.validation_passed = true;
+  ++validated_halo_count_;
   fill_rank();
 }
 
@@ -769,18 +889,27 @@ void RCCLBackend::validate_full_exchange() {
   mpi_check(MPI_Allreduce(&local_ok, &global_ok, 1, MPI_INT, MPI_MIN,
                           cart_comm_),
             "MPI_Allreduce RCCL full validation");
-  if (rank() == 0) {
-    if (global_ok == 1) {
-      std::cout << "RCCL full halo validation PASSED\n";
-    } else {
+  if (global_ok != 1) {
+    validation_failed_ = true;
+    if (rank() == 0) {
       std::cout << "RCCL full halo validation FAILED\n";
     }
-  }
-  if (global_ok != 1) {
     throw std::runtime_error("RCCL full halo validation failed");
   }
   metadata_.validation_passed = true;
+  ++validated_halo_count_;
   fill_rank();
+}
+
+void RCCLBackend::print_validation_summary() const {
+  if (validation_summary_printed_ || stage_b_only_ || !validate_ ||
+      validation_failed_ || validated_halo_count_ == 0 || rank() != 0) {
+    return;
+  }
+  std::cout << "RCCL full halo validation PASSED for "
+            << validated_halo_count_ << " halo size"
+            << (validated_halo_count_ == 1 ? "" : "s") << "\n";
+  validation_summary_printed_ = true;
 }
 
 void RCCLBackend::print_startup() const {
