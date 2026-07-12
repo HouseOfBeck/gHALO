@@ -143,6 +143,161 @@ test_frontier_rccl_cmake_args() (
     "Frontier rccl sets HIP architecture"
 )
 
+# This test mocks Frontier modules to verify backend-specific ROCm selection
+# without requiring OLCF modules on the local workstation.
+# shellcheck disable=SC2030,SC2031
+test_frontier_backend_specific_rocm_selection() (
+  local bin_dir="${GHALO_TEST_TMPDIR}/ghalo-frontier-backend-bin"
+  local rocm624="${GHALO_TEST_TMPDIR}/frontier/rocm-6.2.4"
+  local rocm642="${GHALO_TEST_TMPDIR}/frontier/rocm-6.4.2"
+  local plugin_root="${GHALO_TEST_TMPDIR}/frontier/rccl-net-plugin-1.0"
+  local module_log="${GHALO_TEST_TMPDIR}/ghalo-frontier-module-log.txt"
+  local base_path
+  local expected_rocm642
+  mkdir -p "${bin_dir}" "${rocm624}/bin" "${rocm642}/bin" \
+    "${rocm642}/include/rccl" "${rocm642}/lib" "${plugin_root}"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"${bin_dir}/CC"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"${rocm624}/bin/hipcc"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"${rocm642}/bin/hipcc"
+  : >"${rocm642}/include/rccl/rccl.h"
+  : >"${rocm642}/lib/librccl.so"
+  : >"${rocm642}/lib/libamdhip64.so"
+  chmod +x "${bin_dir}/CC" "${rocm624}/bin/hipcc" "${rocm642}/bin/hipcc"
+  export PATH="${bin_dir}:${PATH}"
+  base_path="${PATH}"
+  expected_rocm642="$(readlink -f "${rocm642}")"
+
+  # The mock is called indirectly by scripts/systems/frontier.sh.
+  # shellcheck disable=SC2317
+  module() {
+    printf '%s %s\n' "$1" "${2:-}" >>"${module_log}"
+    case "$1" in
+      load)
+        case "$2" in
+          PrgEnv-cray | craype-accel-amd-gfx90a)
+            return 0
+            ;;
+          rocm/6.2.4)
+            export ROCM_PATH="${rocm624}"
+            export PATH="${rocm624}/bin:${base_path}"
+            unset OLCF_OFI_NCCL_ROOT
+            return 0
+            ;;
+          rocm/6.4.2)
+            export ROCM_PATH="${rocm642}"
+            export PATH="${rocm642}/bin:${base_path}"
+            return 0
+            ;;
+          rccl-net-plugin/1.0)
+            export OLCF_OFI_NCCL_ROOT="${plugin_root}"
+            return 0
+            ;;
+        esac
+        ;;
+      unload)
+        if [[ "${2:-}" == rocm* ]]; then
+          unset ROCM_PATH
+          export PATH="${base_path}"
+          return 0
+        fi
+        if [[ "${2:-}" == rccl-net-plugin* ]]; then
+          unset OLCF_OFI_NCCL_ROOT
+          return 0
+        fi
+        ;;
+    esac
+    return 1
+  }
+
+  # shellcheck source=../scripts/systems/frontier.sh
+  source "${ROOT}/scripts/systems/frontier.sh"
+
+  export OLCF_OFI_NCCL_ROOT="${plugin_root}"
+  ghalo_system_setup_build mpi-hip
+  assert_eq rocm/6.2.4 "${GHALO_LOADED_ROCM_MODULE}" \
+    "Frontier mpi-hip selects ROCm 6.2.4"
+  assert_eq "${rocm624}" "${ROCM_PATH}" "Frontier mpi-hip ROCM_PATH"
+  if [[ -n "${OLCF_OFI_NCCL_ROOT+x}" ]]; then
+    printf 'Frontier mpi-hip setup should unload rccl-net-plugin/1.0\n' >&2
+    exit 1
+  fi
+
+  ghalo_system_setup_build rccl
+  assert_eq rocm/6.4.2 "${GHALO_LOADED_ROCM_MODULE}" \
+    "Frontier rccl selects ROCm 6.4.2"
+  assert_eq "${rocm642}" "${ROCM_PATH}" "Frontier rccl ROCM_PATH"
+  assert_eq "${rocm642}" "${RCCL_ROOT}" "Frontier rccl RCCL_ROOT"
+  assert_eq "${plugin_root}" "${OLCF_OFI_NCCL_ROOT}" \
+    "Frontier rccl loads OFI plugin"
+  assert_eq "${expected_rocm642}/bin/hipcc" "${GHALO_RESOLVED_HIP_COMPILER}" \
+    "Frontier rccl resolved hipcc"
+  assert_eq "${rocm642}/lib/libamdhip64.so" "${GHALO_RESOLVED_HIP_LIBRARY}" \
+    "Frontier rccl resolved libamdhip64"
+  assert_eq "${rocm642}/lib/librccl.so" "${GHALO_RESOLVED_RCCL_LIBRARY}" \
+    "Frontier rccl resolved librccl"
+  assert_contains 'load rccl-net-plugin/1.0' "${module_log}" \
+    "Frontier rccl loads rccl-net-plugin"
+)
+
+# This test intentionally mutates PATH and ROCm-related variables inside a
+# subshell while validating Frontier mixed-version failure handling.
+# shellcheck disable=SC2030,SC2031
+test_frontier_rccl_mixed_rocm_versions_fail() (
+  local bin_dir="${GHALO_TEST_TMPDIR}/ghalo-frontier-mixed-bin"
+  local rocm624="${GHALO_TEST_TMPDIR}/frontier-mixed/rocm-6.2.4"
+  local rocm642="${GHALO_TEST_TMPDIR}/frontier-mixed/rocm-6.4.2"
+  local plugin_root="${GHALO_TEST_TMPDIR}/frontier-mixed/rccl-net-plugin-1.0"
+  local output="${GHALO_TEST_TMPDIR}/ghalo-frontier-mixed-rocm.txt"
+  local base_path
+  mkdir -p "${bin_dir}" "${rocm624}/bin" "${rocm642}/include/rccl" \
+    "${rocm642}/lib" "${plugin_root}"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"${bin_dir}/CC"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"${rocm624}/bin/hipcc"
+  : >"${rocm642}/include/rccl/rccl.h"
+  : >"${rocm642}/lib/librccl.so"
+  : >"${rocm642}/lib/libamdhip64.so"
+  chmod +x "${bin_dir}/CC" "${rocm624}/bin/hipcc"
+  export PATH="${bin_dir}:${rocm624}/bin:${PATH}"
+  base_path="${PATH}"
+
+  # The mock is called indirectly by scripts/systems/frontier.sh.
+  # shellcheck disable=SC2317
+  module() {
+    case "$1" in
+      load)
+        case "$2" in
+          PrgEnv-cray | craype-accel-amd-gfx90a)
+            return 0
+            ;;
+          rocm/6.4.2)
+            export ROCM_PATH="${rocm642}"
+            export PATH="${base_path}"
+            return 0
+            ;;
+          rccl-net-plugin/1.0)
+            export OLCF_OFI_NCCL_ROOT="${plugin_root}"
+            return 0
+            ;;
+        esac
+        ;;
+      unload)
+        return 0
+        ;;
+    esac
+    return 1
+  }
+
+  # shellcheck source=../scripts/systems/frontier.sh
+  source "${ROOT}/scripts/systems/frontier.sh"
+
+  if (ghalo_system_setup_build rccl) >"${output}" 2>&1; then
+    printf 'expected mixed Frontier RCCL ROCm setup to fail\n' >&2
+    exit 1
+  fi
+  assert_contains 'RCCL environment mismatch' "${output}" \
+    "Frontier rccl rejects mixed ROCm versions"
+)
+
 # This test intentionally mocks PATH and MPICH_GPU_SUPPORT_ENABLED inside a
 # subshell so the Borg environment setup cannot affect later tests.
 # shellcheck disable=SC2030,SC2031
@@ -443,6 +598,8 @@ test_system_resolution_metadata
 test_backend_validation_accepts_rccl
 test_borg_rccl_uses_frontier_build_alias
 test_frontier_rccl_cmake_args
+test_frontier_backend_specific_rocm_selection
+test_frontier_rccl_mixed_rocm_versions_fail
 test_borg_environment_setup
 test_borg_backend_specific_rocm_selection
 test_borg_rccl_mixed_rocm_versions_fail
