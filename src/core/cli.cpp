@@ -6,7 +6,7 @@
 namespace ghalo {
 
 void print_usage(std::ostream& out) {
-  out << "Usage: ghalo [--backend mpi|mpi-hip] [--csv PATH] [--json PATH]\n"
+  out << "Usage: ghalo [--backend mpi|mpi-hip|rccl] [--csv PATH] [--json PATH]\n"
       << "             [--target-seconds SECONDS] [--device-map local-rank]\n"
       << "             [--validate|--no-validate] [--allow-gpu-oversubscription]\n"
       << "             [--phase-timing]\n";

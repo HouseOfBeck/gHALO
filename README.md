@@ -49,15 +49,17 @@ See [Historical Context](docs/HISTORY.md) and
 ## Current Status
 
 gHALO v0.3.0 is an early research release with two implemented benchmark
-backends:
+backends and one experimental backend scaffold:
 
 - `mpi`: CPU/host-memory MPI reference backend.
 - `mpi-hip`: AMD HIP device-memory backend using GPU-aware MPI.
+- `rccl`: experimental build-system and backend scaffolding only; halo
+  communication is not implemented yet.
 
 The `mpi-hip` backend has been validated on Frontier with Cray MPICH, AMD GPUs,
 correctness validation, JSON/CSV output, metadata capture, phase timing, and
-post-run analysis tooling. RCCL, UCX, heat maps, and automated cluster-health
-diagnostics remain planned work.
+post-run analysis tooling. RCCL communication, UCX, heat maps, and automated
+cluster-health diagnostics remain planned work.
 
 The development model assumes:
 
@@ -157,12 +159,34 @@ export MPICH_GPU_SUPPORT_ENABLED=1
 Additional future feature gates remain available but are not implemented yet:
 
 ```sh
-cmake -S . -B build -DGHALO_ENABLE_RCCL=ON
+cmake -S . -B build -DGHALO_ENABLE_MPI=ON -DGHALO_ENABLE_HIP=ON -DGHALO_ENABLE_RCCL=ON
 cmake -S . -B build -DGHALO_ENABLE_UCX=ON
 ```
 
 Those options are intended for remote Linux HPC environments where the required
 toolchains and libraries are available.
+
+The RCCL path is scaffolding only in v0.3.x. A future build will use:
+
+```sh
+GHALO_SYSTEM_NAME=borg scripts/build.sh --backend rccl --clean
+```
+
+Expected paths follow the existing system/backend layout:
+
+```text
+builds/frontier/rccl/
+results/borg/<timestamp>_rccl_<label>/
+```
+
+To inspect RCCL availability on Frontier or Borg:
+
+```sh
+module avail rccl
+module spider rccl
+find "${ROCM_PATH:-/opt/rocm}" -name 'librccl.so*' 2>/dev/null
+find "${ROCM_PATH:-/opt/rocm}" -path '*include*' \( -name rccl.h -o -name nccl.h \) 2>/dev/null
+```
 
 For repeatable HPC builds and result capture across systems, use the portable
 workflow documented in [Build and Run Workflow](docs/BUILD_AND_RUN.md):
@@ -272,6 +296,7 @@ gHALO values:
 - [Historical Context](docs/HISTORY.md)
 - [Version 0 Design](docs/VERSION_0_DESIGN.md)
 - [GPU-Aware MPI Design](docs/GPU_AWARE_MPI_DESIGN.md)
+- [RCCL Backend Design](docs/RCCL_BACKEND_DESIGN.md)
 
 ## Contributing
 

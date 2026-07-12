@@ -6,6 +6,9 @@
 #ifdef GHALO_HAVE_MPI_HIP
 #include "mpi_hip_backend.hpp"
 #endif
+#ifdef GHALO_HAVE_RCCL
+#include "ghalo/rccl_backend.hpp"
+#endif
 
 #include <exception>
 #include <iostream>
@@ -26,6 +29,15 @@ std::unique_ptr<ghalo::Backend> make_backend(const ghalo::CliOptions& options) {
     throw std::runtime_error(
         "backend mpi-hip requested, but gHALO was not built with "
         "GHALO_ENABLE_MPI_HIP=ON");
+#endif
+  }
+  if (options.backend == "rccl") {
+#ifdef GHALO_HAVE_RCCL
+    return std::make_unique<ghalo::RCCLBackend>();
+#else
+    throw std::runtime_error(
+        "backend rccl requested, but gHALO was not built with "
+        "GHALO_ENABLE_RCCL=ON");
 #endif
   }
   throw std::invalid_argument("unknown backend: " + options.backend);

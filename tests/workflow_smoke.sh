@@ -106,6 +106,43 @@ test_system_resolution_metadata() (
     "${output}" "binary metadata"
 )
 
+test_backend_validation_accepts_rccl() (
+  ghalo_validate_backend rccl
+  local output="${GHALO_TEST_TMPDIR}/ghalo-backend-validation.txt"
+  if (ghalo_validate_backend bad-backend) >"${output}" 2>&1; then
+    printf 'expected invalid backend to fail\n' >&2
+    exit 1
+  fi
+  assert_contains "Expected 'mpi', 'mpi-hip', or 'rccl'" \
+    "${output}" "backend validation lists rccl"
+)
+
+# This test intentionally modifies the active system inside a subshell while
+# verifying Borg's default build alias behavior.
+# shellcheck disable=SC2030,SC2031
+test_borg_rccl_uses_frontier_build_alias() (
+  export GHALO_ACTIVE_SYSTEM=borg
+  unset GHALO_BUILD_SYSTEM_ALIAS
+  unset GHALO_USE_NATIVE_BUILD
+  # shellcheck source=../scripts/systems/borg.sh
+  source "${ROOT}/scripts/systems/borg.sh"
+
+  assert_eq frontier "$(ghalo_system_build_alias rccl)" \
+    "Borg rccl default alias"
+)
+
+test_frontier_rccl_cmake_args() (
+  # shellcheck source=../scripts/systems/frontier.sh
+  source "${ROOT}/scripts/systems/frontier.sh"
+
+  local output="${GHALO_TEST_TMPDIR}/ghalo-frontier-rccl-cmake.txt"
+  ghalo_system_cmake_args rccl >"${output}"
+  assert_contains '-DCMAKE_CXX_COMPILER=CC' "${output}" \
+    "Frontier rccl uses Cray wrapper"
+  assert_contains '-DCMAKE_HIP_ARCHITECTURES=gfx90a' "${output}" \
+    "Frontier rccl sets HIP architecture"
+)
+
 # This test intentionally mocks PATH and MPICH_GPU_SUPPORT_ENABLED inside a
 # subshell so the Borg environment setup cannot affect later tests.
 # shellcheck disable=SC2030,SC2031
@@ -258,6 +295,9 @@ test_borg_build_alias_resolution
 test_native_default_for_generic_system
 test_missing_aliased_binary_error
 test_system_resolution_metadata
+test_backend_validation_accepts_rccl
+test_borg_rccl_uses_frontier_build_alias
+test_frontier_rccl_cmake_args
 test_borg_environment_setup
 test_submit_dry_run
 test_submit_rank_layout_failure

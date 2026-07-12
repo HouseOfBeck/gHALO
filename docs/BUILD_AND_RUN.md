@@ -14,6 +14,7 @@ builds/
   <system-name>/
     mpi/
     mpi-hip/
+    rccl/
 ```
 
 Results are stored by system and timestamp:
@@ -41,13 +42,14 @@ Use `scripts/build.sh` to configure and build one backend for one system:
 ```sh
 GHALO_SYSTEM_NAME=frontier scripts/build.sh --backend mpi
 GHALO_SYSTEM_NAME=frontier scripts/build.sh --backend mpi-hip --clean
+GHALO_SYSTEM_NAME=frontier scripts/build.sh --backend rccl --clean
 ```
 
 Supported options:
 
 ```text
 --system <name>
---backend mpi|mpi-hip
+--backend mpi|mpi-hip|rccl
 --build-type Release|Debug
 --clean
 --jobs <N>
@@ -68,6 +70,19 @@ The MPI-HIP build enables MPI, HIP, and MPI-HIP:
 -DGHALO_ENABLE_HIP=ON
 -DGHALO_ENABLE_MPI_HIP=ON
 ```
+
+The RCCL build enables MPI, HIP, and RCCL but does not enable MPI-HIP unless a
+future implementation explicitly shares that path:
+
+```text
+-DGHALO_ENABLE_MPI=ON
+-DGHALO_ENABLE_HIP=ON
+-DGHALO_ENABLE_MPI_HIP=OFF
+-DGHALO_ENABLE_RCCL=ON
+```
+
+The RCCL backend is experimental scaffolding only. It is not yet a runnable
+communication backend and does not make performance claims.
 
 Machine-specific CMake additions come from
 `scripts/systems/<system-name>.sh`. The portable script does not hard-code
@@ -202,6 +217,27 @@ with fields for `active_system`, `build_system`, `backend`, and `binary`.
 
 Profiles may honor `GHALO_BUILD_SYSTEM_ALIAS=<name>` for explicit aliasing and
 `GHALO_USE_NATIVE_BUILD=1` to force the active system's own build tree.
+
+For Borg RCCL experiments, the default build alias also points to Frontier:
+
+```text
+active system: borg
+build system:  frontier
+binary:        builds/frontier/rccl/ghalo
+results:       results/borg/<timestamp>_rccl_<label>/
+```
+
+Inspect RCCL availability on Frontier or Borg with:
+
+```sh
+module avail rccl
+module spider rccl
+find "${ROCM_PATH:-/opt/rocm}" -name 'librccl.so*' 2>/dev/null
+find "${ROCM_PATH:-/opt/rocm}" -path '*include*' \( -name rccl.h -o -name nccl.h \) 2>/dev/null
+```
+
+Set `RCCL_ROOT`, `RCCL_PATH`, or `ROCM_PATH` if RCCL is installed outside the
+default search paths.
 
 ## Batch Submission
 
@@ -499,3 +535,5 @@ results/*
 
 The exception allows future curated reference results to be tracked under
 `results/reference/` without accidentally tracking routine benchmark output.
+`rccl` is accepted by the workflow for future RCCL builds, but the backend is
+not yet a runnable halo exchange implementation.

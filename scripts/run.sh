@@ -10,11 +10,11 @@ source "${SCRIPT_DIR}/common.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/run.sh --backend mpi|mpi-hip [options]
+Usage: scripts/run.sh --backend mpi|mpi-hip|rccl [options]
 
 Options:
   --system NAME              System configuration name. GHALO_SYSTEM_NAME wins if set.
-  --backend mpi|mpi-hip      Backend to run.
+  --backend mpi|mpi-hip|rccl Backend to run.
   --nodes N                  Number of nodes. Default: 1.
   --ranks N                  Total MPI ranks. Default: 1.
   --ranks-per-node N         MPI ranks per node.

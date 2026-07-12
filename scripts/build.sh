@@ -10,11 +10,11 @@ source "${SCRIPT_DIR}/common.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/build.sh --backend mpi|mpi-hip [options]
+Usage: scripts/build.sh --backend mpi|mpi-hip|rccl [options]
 
 Options:
   --system NAME              System configuration name. GHALO_SYSTEM_NAME wins if set.
-  --backend mpi|mpi-hip      Backend build to configure.
+  --backend mpi|mpi-hip|rccl Backend build to configure.
   --build-type TYPE          CMake build type: Release or Debug. Default: Release.
   --clean                    Remove the selected build directory before configuring.
   --jobs N                   Parallel build jobs passed to cmake --build.
@@ -103,6 +103,7 @@ case "${backend}" in
       -DGHALO_ENABLE_MPI=ON
       -DGHALO_ENABLE_HIP=OFF
       -DGHALO_ENABLE_MPI_HIP=OFF
+      -DGHALO_ENABLE_RCCL=OFF
     )
     ;;
   mpi-hip)
@@ -110,6 +111,15 @@ case "${backend}" in
       -DGHALO_ENABLE_MPI=ON
       -DGHALO_ENABLE_HIP=ON
       -DGHALO_ENABLE_MPI_HIP=ON
+      -DGHALO_ENABLE_RCCL=OFF
+    )
+    ;;
+  rccl)
+    cmake_args+=(
+      -DGHALO_ENABLE_MPI=ON
+      -DGHALO_ENABLE_HIP=ON
+      -DGHALO_ENABLE_MPI_HIP=OFF
+      -DGHALO_ENABLE_RCCL=ON
     )
     ;;
 esac
@@ -131,6 +141,11 @@ printf '%s\n' "${backend}" >"${info_dir}/backend.txt"
 
 echo "Configuring gHALO ${backend} for system '${system}' in ${build_dir}"
 cmake "${cmake_args[@]}"
+
+if [[ "${backend}" == "rccl" && -f "${build_dir}/CMakeCache.txt" ]]; then
+  grep -E '^(GHALO_ENABLE_RCCL|GHALO_RCCL_INCLUDE_DIR|GHALO_RCCL_LIBRARY|CMAKE_HIP_ARCHITECTURES)' \
+    "${build_dir}/CMakeCache.txt" >"${info_dir}/rccl.txt" || true
+fi
 
 build_args=(--build "${build_dir}")
 if [[ -n "${jobs}" ]]; then

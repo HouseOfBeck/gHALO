@@ -193,6 +193,11 @@ void test_cli_phase_timing_parse() {
   assert(options.phase_timing);
   assert(options.target_seconds == 0.1);
 
+  const char* rccl_argv_storage[] = {"ghalo", "--backend", "rccl"};
+  auto* rccl_argv = const_cast<char**>(rccl_argv_storage);
+  const auto rccl_options = ghalo::parse_cli_options(3, rccl_argv);
+  assert(rccl_options.backend == "rccl");
+
   const char* bad_argv_storage[] = {"ghalo", "--phase-timing", "--csv"};
   auto* bad_argv = const_cast<char**>(bad_argv_storage);
   bool threw = false;

@@ -37,8 +37,8 @@ ghalo_validate_system_name() {
 ghalo_validate_backend() {
   local backend="$1"
   case "${backend}" in
-    mpi | mpi-hip) ;;
-    *) ghalo_die "unsupported backend '${backend}'. Expected 'mpi' or 'mpi-hip'." ;;
+    mpi | mpi-hip | rccl) ;;
+    *) ghalo_die "unsupported backend '${backend}'. Expected 'mpi', 'mpi-hip', or 'rccl'." ;;
   esac
 }
 
@@ -154,6 +154,8 @@ ghalo_capture_environment() {
       MPICH_GPU_SUPPORT_ENABLED \
       MPI_HOME \
       ROCM_PATH \
+      RCCL_ROOT \
+      RCCL_PATH \
       HIP_PATH \
       ROCR_VISIBLE_DEVICES \
       HIP_VISIBLE_DEVICES \

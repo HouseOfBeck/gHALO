@@ -29,6 +29,14 @@ if(GHALO_ENABLE_MPI_HIP AND NOT GHALO_ENABLE_HIP)
   message(FATAL_ERROR "GHALO_ENABLE_MPI_HIP requires GHALO_ENABLE_HIP=ON")
 endif()
 
+if(GHALO_ENABLE_RCCL AND NOT GHALO_ENABLE_MPI)
+  message(FATAL_ERROR "GHALO_ENABLE_RCCL requires GHALO_ENABLE_MPI=ON")
+endif()
+
+if(GHALO_ENABLE_RCCL AND NOT GHALO_ENABLE_HIP)
+  message(FATAL_ERROR "GHALO_ENABLE_RCCL requires GHALO_ENABLE_HIP=ON")
+endif()
+
 add_library(ghalo_project_options INTERFACE)
 target_compile_features(ghalo_project_options INTERFACE cxx_std_20)
 
@@ -53,12 +61,110 @@ if(GHALO_ENABLE_MPI)
   find_package(MPI REQUIRED COMPONENTS CXX)
 endif()
 
-if(GHALO_ENABLE_RCCL)
-  find_package(rccl REQUIRED)
-endif()
-
 if(GHALO_ENABLE_UCX)
   find_package(UCX REQUIRED)
+endif()
+
+if(GHALO_ENABLE_RCCL)
+  set(GHALO_RCCL_ROOT_HINTS)
+  foreach(GHALO_RCCL_ROOT_ENV RCCL_ROOT RCCL_PATH ROCM_PATH)
+    if(DEFINED ENV{${GHALO_RCCL_ROOT_ENV}})
+      list(APPEND GHALO_RCCL_ROOT_HINTS "$ENV{${GHALO_RCCL_ROOT_ENV}}")
+    endif()
+  endforeach()
+
+  find_package(rccl CONFIG QUIET)
+  if(TARGET rccl::rccl OR TARGET rccl)
+    if(TARGET rccl::rccl)
+      set(GHALO_RCCL_PACKAGE_TARGET rccl::rccl)
+    else()
+      set(GHALO_RCCL_PACKAGE_TARGET rccl)
+    endif()
+    get_target_property(
+      GHALO_RCCL_TARGET_INCLUDE_DIRS
+      ${GHALO_RCCL_PACKAGE_TARGET}
+      INTERFACE_INCLUDE_DIRECTORIES
+    )
+    get_target_property(
+      GHALO_RCCL_TARGET_LIBRARY
+      ${GHALO_RCCL_PACKAGE_TARGET}
+      IMPORTED_LOCATION
+    )
+    if(NOT GHALO_RCCL_TARGET_INCLUDE_DIRS)
+      set(
+        GHALO_RCCL_TARGET_INCLUDE_DIRS
+        "provided by ${GHALO_RCCL_PACKAGE_TARGET}"
+      )
+    endif()
+    if(NOT GHALO_RCCL_TARGET_LIBRARY)
+      set(GHALO_RCCL_TARGET_LIBRARY "provided by ${GHALO_RCCL_PACKAGE_TARGET}")
+    endif()
+    message(STATUS "  RCCL CMake package: found")
+    message(STATUS "  RCCL target: ${GHALO_RCCL_PACKAGE_TARGET}")
+    message(STATUS "  RCCL include directory: ${GHALO_RCCL_TARGET_INCLUDE_DIRS}")
+    message(STATUS "  RCCL library: ${GHALO_RCCL_TARGET_LIBRARY}")
+    message(STATUS "  RCCL version hint: provided by CMake package")
+  else()
+    find_path(
+      GHALO_RCCL_INCLUDE_DIR
+      NAMES rccl/rccl.h rccl.h nccl.h
+      HINTS ${GHALO_RCCL_ROOT_HINTS}
+      PATH_SUFFIXES include include/rccl
+    )
+    find_library(
+      GHALO_RCCL_LIBRARY
+      NAMES rccl
+      HINTS ${GHALO_RCCL_ROOT_HINTS}
+      PATH_SUFFIXES lib lib64 lib/x86_64-linux-gnu
+    )
+    if(NOT GHALO_RCCL_INCLUDE_DIR OR NOT GHALO_RCCL_LIBRARY)
+      message(
+        FATAL_ERROR
+        "GHALO_ENABLE_RCCL=ON requires RCCL headers and librccl. "
+        "Set RCCL_ROOT, RCCL_PATH, or ROCM_PATH if RCCL is installed in a "
+        "non-standard location."
+      )
+    endif()
+    add_library(ghalo_rccl_external INTERFACE)
+    target_include_directories(
+      ghalo_rccl_external
+      INTERFACE
+        ${GHALO_RCCL_INCLUDE_DIR}
+    )
+    target_link_libraries(
+      ghalo_rccl_external
+      INTERFACE
+        ${GHALO_RCCL_LIBRARY}
+    )
+    message(STATUS "  RCCL include directory: ${GHALO_RCCL_INCLUDE_DIR}")
+    message(STATUS "  RCCL library: ${GHALO_RCCL_LIBRARY}")
+    if(EXISTS "${GHALO_RCCL_INCLUDE_DIR}/rccl/rccl.h")
+      file(
+        STRINGS "${GHALO_RCCL_INCLUDE_DIR}/rccl/rccl.h"
+        GHALO_RCCL_VERSION_LINES
+        REGEX "RCCL_VERSION|NCCL_VERSION"
+      )
+    elseif(EXISTS "${GHALO_RCCL_INCLUDE_DIR}/rccl.h")
+      file(
+        STRINGS "${GHALO_RCCL_INCLUDE_DIR}/rccl.h"
+        GHALO_RCCL_VERSION_LINES
+        REGEX "RCCL_VERSION|NCCL_VERSION"
+      )
+    elseif(EXISTS "${GHALO_RCCL_INCLUDE_DIR}/nccl.h")
+      file(
+        STRINGS "${GHALO_RCCL_INCLUDE_DIR}/nccl.h"
+        GHALO_RCCL_VERSION_LINES
+        REGEX "RCCL_VERSION|NCCL_VERSION"
+      )
+    endif()
+    if(GHALO_RCCL_VERSION_LINES)
+      list(GET GHALO_RCCL_VERSION_LINES 0 GHALO_RCCL_VERSION_LINE)
+      message(STATUS "  RCCL version hint: ${GHALO_RCCL_VERSION_LINE}")
+    else()
+      message(STATUS "  RCCL version hint: not discovered")
+    endif()
+  endif()
+  message(STATUS "  HIP architectures: ${CMAKE_HIP_ARCHITECTURES}")
 endif()
 
 message(STATUS "gHALO configuration")
@@ -165,11 +271,38 @@ if(GHALO_ENABLE_MPI)
     )
   endif()
 
+  if(GHALO_ENABLE_RCCL)
+    add_library(ghalo_rccl_backend src/rccl_backend.cpp)
+    target_link_libraries(
+      ghalo_rccl_backend
+      PUBLIC
+        ghalo_core
+        MPI::MPI_CXX
+    )
+    if(TARGET rccl::rccl)
+      target_link_libraries(ghalo_rccl_backend PUBLIC rccl::rccl)
+    elseif(TARGET rccl)
+      target_link_libraries(ghalo_rccl_backend PUBLIC rccl)
+    else()
+      target_link_libraries(ghalo_rccl_backend PUBLIC ghalo_rccl_external)
+    endif()
+    if(TARGET hip::host)
+      target_link_libraries(ghalo_rccl_backend PUBLIC hip::host)
+    elseif(TARGET hip::device)
+      target_link_libraries(ghalo_rccl_backend PUBLIC hip::device)
+    endif()
+    target_compile_definitions(ghalo_rccl_backend PUBLIC GHALO_HAVE_RCCL=1)
+  endif()
+
   add_executable(ghalo src/app/main.cpp)
   target_link_libraries(ghalo PRIVATE ghalo_mpi_backend)
   if(GHALO_ENABLE_MPI_HIP)
     target_link_libraries(ghalo PRIVATE ghalo_mpi_hip_backend)
     target_compile_definitions(ghalo PRIVATE GHALO_HAVE_MPI_HIP=1)
+  endif()
+  if(GHALO_ENABLE_RCCL)
+    target_link_libraries(ghalo PRIVATE ghalo_rccl_backend)
+    target_compile_definitions(ghalo PRIVATE GHALO_HAVE_RCCL=1)
   endif()
 else()
   message(STATUS "gHALO executable target is disabled because GHALO_ENABLE_MPI=OFF")

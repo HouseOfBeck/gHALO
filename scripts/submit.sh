@@ -10,11 +10,11 @@ source "${SCRIPT_DIR}/common.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/submit.sh --backend mpi|mpi-hip --nodes N --ranks N --ranks-per-node N --time HH:MM:SS [options]
+Usage: scripts/submit.sh --backend mpi|mpi-hip|rccl --nodes N --ranks N --ranks-per-node N --time HH:MM:SS [options]
 
 Options:
   --system NAME                 System configuration name. GHALO_SYSTEM_NAME wins if set.
-  --backend mpi|mpi-hip         Backend to run.
+  --backend mpi|mpi-hip|rccl    Backend to run.
   --account ACCOUNT             Slurm account.
   --partition PARTITION         Slurm partition.
   --nodes N                     Number of nodes.
