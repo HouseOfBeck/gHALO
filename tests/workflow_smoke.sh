@@ -695,6 +695,32 @@ test_generate_analysis_report_wrapper() (
     "${output}" "analysis report wrapper documents baseline output"
 )
 
+test_validation_suite_verifies_results() (
+  local suite="${ROOT}/scripts/run_validation_suite.sh"
+  local output="${GHALO_TEST_TMPDIR}/ghalo-validation-suite-help.txt"
+  "${suite}" --help >"${output}"
+  assert_contains 'Usage: scripts/run_validation_suite.sh' \
+    "${output}" "validation suite usage"
+  assert_contains 'MPI-HIP 1 node' "${output}" \
+    "validation suite documents MPI-HIP 1-node case"
+  assert_contains 'RCCL stream-ordered 2 nodes' "${output}" \
+    "validation suite documents RCCL stream-ordered case"
+  assert_contains 'command -v jq' "${suite}" \
+    "validation suite requires jq"
+  assert_contains 'validation_passed != true' "${suite}" \
+    "validation suite checks validation_passed"
+  assert_contains 'validation_enabled != true' "${suite}" \
+    "validation suite checks validation_enabled"
+  assert_contains "require_metadata_key \"\${result_metadata}\" rocm_version" \
+    "${suite}" "validation suite checks ROCm metadata"
+  assert_contains 'PASS:' "${suite}" \
+    "validation suite prints pass summary"
+  assert_contains 'FAIL:' "${suite}" \
+    "validation suite prints fail summary"
+  assert_contains 'exit 1' "${suite}" \
+    "validation suite fails when cases fail"
+)
+
 test_migrate_results_dry_run() (
   local flat="${GHALO_TEST_TMPDIR}/results/frontier/20260712T000000Z_rccl_rccl_conservative"
   local output="${GHALO_TEST_TMPDIR}/ghalo-migrate-results.txt"
@@ -749,4 +775,5 @@ test_batch_job_requires_slurm
 test_batch_job_uses_explicit_repo_root_from_spool_copy
 test_run_loop_uses_results_for_benchmarks
 test_generate_analysis_report_wrapper
+test_validation_suite_verifies_results
 test_migrate_results_dry_run
