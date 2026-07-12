@@ -170,6 +170,21 @@ test_frontier_rccl_cmake_args() (
     "Frontier rccl sets HIP architecture"
 )
 
+test_frontier_launch_uses_exact_node_steps() (
+  # shellcheck source=../scripts/systems/frontier.sh
+  source "${ROOT}/scripts/systems/frontier.sh"
+
+  local output="${GHALO_TEST_TMPDIR}/ghalo-frontier-launch.txt"
+  ghalo_system_launch mpi-hip 1 8 8 "" /repo/ghalo --backend mpi-hip \
+    >"${output}"
+  assert_contains 'srun' "${output}" "Frontier launch uses srun"
+  assert_contains '--exact' "${output}" "Frontier launch constrains exact step resources"
+  assert_contains '-N' "${output}" "Frontier launch includes node count flag"
+  assert_contains '1' "${output}" "Frontier launch includes requested one-node count"
+  assert_contains '--ntasks-per-node' "${output}" \
+    "Frontier launch includes ranks-per-node flag"
+)
+
 # This test mocks Frontier modules to verify backend-specific ROCm selection
 # without requiring OLCF modules on the local workstation.
 # shellcheck disable=SC2030,SC2031
@@ -711,6 +726,10 @@ test_validation_suite_verifies_results() (
     "validation suite checks validation_passed"
   assert_contains 'validation_enabled != true' "${suite}" \
     "validation suite checks validation_enabled"
+  assert_contains 'detected node count mismatch' "${suite}" \
+    "validation suite checks detected topology"
+  assert_contains 'requested_nodes' "${suite}" \
+    "validation suite checks requested node metadata"
   assert_contains "require_metadata_key \"\${result_metadata}\" rocm_version" \
     "${suite}" "validation suite checks ROCm metadata"
   assert_contains 'PASS:' "${suite}" \
@@ -764,6 +783,7 @@ test_backend_validation_accepts_rccl
 test_result_path_helpers
 test_borg_rccl_uses_frontier_build_alias
 test_frontier_rccl_cmake_args
+test_frontier_launch_uses_exact_node_steps
 test_frontier_backend_specific_rocm_selection
 test_frontier_rccl_mixed_rocm_versions_fail
 test_borg_environment_setup

@@ -405,6 +405,26 @@ class GhaloAnalyzeTests(unittest.TestCase):
             )
             self.assertEqual(env_run.nodes, 16)
 
+            requested_run = analyze.load_run(
+                str(
+                    write_result_dir(
+                        root,
+                        "requested",
+                        ranks=8,
+                        metadata_files={
+                            "result-metadata.txt": (
+                                "requested_nodes=1\n"
+                                "requested_ranks=8\n"
+                                "requested_ranks_per_node=8\n"
+                            ),
+                            "environment.txt": "SLURM_JOB_NUM_NODES=2\n",
+                        },
+                    )
+                )
+            )
+            self.assertEqual(requested_run.nodes, 1)
+            self.assertEqual(requested_run.ranks_per_node, 8)
+
     def test_node_count_safe_derivation_and_unknown_warning(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

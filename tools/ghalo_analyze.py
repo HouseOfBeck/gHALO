@@ -224,6 +224,12 @@ class Run:
 
     @property
     def nodes(self) -> Optional[int]:
+        requested = parse_int(
+            self.meta_value("requested_nodes", from_file="result-metadata.txt")
+        )
+        if requested is not None:
+            return requested
+
         explicit = self.first_result_metadata_int(
             "nodes",
             "node_count",
@@ -266,6 +272,11 @@ class Run:
         )
         if explicit is not None:
             return explicit
+        requested = parse_int(
+            self.meta_value("requested_ranks_per_node", from_file="result-metadata.txt")
+        )
+        if requested is not None:
+            return requested
         value = self.meta_value(
             "ranks_per_node",
             "tasks_per_node",

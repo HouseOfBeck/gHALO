@@ -145,13 +145,17 @@ verify_result_bundle() {
   local label="$1"
   local result_dir="$2"
   local expected_backend="$3"
-  local expected_ranks="$4"
-  local expected_sync_mode="$5"
+  local expected_nodes="$4"
+  local expected_ranks="$5"
+  local expected_ranks_per_node="$6"
+  local expected_sync_mode="$7"
 
   local json_path="${result_dir}/ghalo.json"
   local system_metadata="${result_dir}/system-resolution.txt"
   local result_metadata="${result_dir}/result-metadata.txt"
   local exit_status_path="${result_dir}/exit-status.txt"
+  local detected_nodes
+  local detected_ranks
 
   require_file "${json_path}" "ghalo.json" || return 1
   require_file "${system_metadata}" "system metadata" || return 1
@@ -174,6 +178,31 @@ verify_result_bundle() {
     '[.results[] | select(.topology.world_size != $ranks)] | length == 0' \
     "${json_path}" >/dev/null ||
     { printf 'unexpected rank count in ghalo.json\n'; return 1; }
+  detected_nodes="$(
+    jq -r '[.results[0].metadata.ranks[]?.hostname |
+             select(. != null and . != "")] | unique | length' "${json_path}"
+  )"
+  if [[ "${detected_nodes}" != "${expected_nodes}" ]]; then
+    printf 'detected node count mismatch: requested %s, detected %s unique hostnames\n' \
+      "${expected_nodes}" "${detected_nodes}"
+    return 1
+  fi
+  detected_ranks="$(
+    jq -r '[.results[0].metadata.ranks[]?] | length' "${json_path}"
+  )"
+  if [[ "${detected_ranks}" != "${expected_ranks}" ]]; then
+    printf 'detected rank metadata mismatch: requested %s ranks, found %s rank metadata entries\n' \
+      "${expected_ranks}" "${detected_ranks}"
+    return 1
+  fi
+  if [[ "${expected_ranks_per_node}" -gt 0 &&
+        "${detected_nodes}" -gt 0 &&
+        ( $((detected_ranks % detected_nodes)) -ne 0 ||
+          $((detected_ranks / detected_nodes)) -ne "${expected_ranks_per_node}" ) ]]; then
+    printf 'detected ranks-per-node mismatch: requested %s, detected %s\n' \
+      "${expected_ranks_per_node}" "$((detected_ranks / detected_nodes))"
+    return 1
+  fi
   jq -e '[.results[] | select(.metadata.validation_enabled != true)] | length == 0' \
     "${json_path}" >/dev/null ||
     { printf 'validation_enabled is not true for every result\n'; return 1; }
@@ -198,6 +227,9 @@ verify_result_bundle() {
   require_metadata_key "${result_metadata}" min_halo || return 1
   require_metadata_key "${result_metadata}" max_halo || return 1
   require_metadata_key "${result_metadata}" halo_multiplier || return 1
+  require_metadata_key "${result_metadata}" requested_nodes || return 1
+  require_metadata_key "${result_metadata}" requested_ranks || return 1
+  require_metadata_key "${result_metadata}" requested_ranks_per_node || return 1
 
   grep -qx "active_system=${system}" "${system_metadata}" ||
     { printf 'active_system metadata mismatch\n'; return 1; }
@@ -205,6 +237,12 @@ verify_result_bundle() {
     { printf 'result_category metadata mismatch\n'; return 1; }
   grep -qx "rocm_version=${rocm_version}" "${result_metadata}" ||
     { printf 'rocm_version metadata mismatch\n'; return 1; }
+  grep -qx "requested_nodes=${expected_nodes}" "${result_metadata}" ||
+    { printf 'requested_nodes metadata mismatch\n'; return 1; }
+  grep -qx "requested_ranks=${expected_ranks}" "${result_metadata}" ||
+    { printf 'requested_ranks metadata mismatch\n'; return 1; }
+  grep -qx "requested_ranks_per_node=${expected_ranks_per_node}" "${result_metadata}" ||
+    { printf 'requested_ranks_per_node metadata mismatch\n'; return 1; }
 }
 
 run_validation_case() {
@@ -263,7 +301,8 @@ run_validation_case() {
   fi
 
   if verify_output="$(verify_result_bundle "${label}" "${result_dir}" \
-      "${expected_backend}" "${ranks}" "${sync_mode}" 2>&1)"; then
+      "${expected_backend}" "${nodes}" "${ranks}" "${ranks_per_node}" \
+      "${sync_mode}" 2>&1)"; then
     record_pass "${label}"
     RESULT_DIRS+=("${result_dir}")
     printf 'PASS: %s\n' "${label}"

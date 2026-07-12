@@ -247,6 +247,9 @@ ghalo_write_system_resolution "${result_dir}/system-resolution.txt" \
   printf 'min_halo=%s\n' "${min_halo}"
   printf 'max_halo=%s\n' "${max_halo}"
   printf 'halo_multiplier=%s\n' "${halo_multiplier}"
+  printf 'requested_nodes=%s\n' "${nodes}"
+  printf 'requested_ranks=%s\n' "${ranks}"
+  printf 'requested_ranks_per_node=%s\n' "${ranks_per_node:-}"
 } >"${result_dir}/result-metadata.txt"
 if [[ -n "${GHALO_SUBMIT_COMMAND:-}" || -n "${SLURM_JOB_ID:-}" ]]; then
   {

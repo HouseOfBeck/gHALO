@@ -244,7 +244,7 @@ ghalo_system_launch() {
   local extra_srun_args="$5"
   shift 5
 
-  local command=(srun -N "${nodes}" -n "${ranks}")
+  local command=(srun --exact -N "${nodes}" -n "${ranks}")
   if [[ -n "${ranks_per_node}" ]]; then
     command+=(--ntasks-per-node "${ranks_per_node}")
   fi
