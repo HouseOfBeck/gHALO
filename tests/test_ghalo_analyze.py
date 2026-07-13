@@ -177,6 +177,189 @@ class GhaloAnalyzeTests(unittest.TestCase):
             self.assertEqual(len(runs), 2)
             self.assertEqual({run.rocm_version for run in runs}, {"6.4.2"})
 
+    def test_hierarchical_frontier_path_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result = write_result_dir(
+                root / "results" / "frontier" / "rocm-6.4.2" / "validation",
+                "20260712T220219Z_rccl_conservative-validation-1node-8ranks",
+                backend="RCCLBackend",
+                ranks=8,
+                metadata_files={
+                    "system-resolution.txt": "build_system=frontier\nbackend=rccl\n"
+                },
+            )
+            run = analyze.load_run(str(result))
+
+        self.assertEqual(run.system, "frontier")
+        self.assertEqual(run.rocm_version, "rocm-6.4.2")
+        self.assertEqual(run.suite, "validation")
+        self.assertEqual(run.timestamp, "20260712T220219Z")
+        self.assertEqual(run.path_metadata["backend"], "rccl")
+        self.assertEqual(run.path_metadata["label"], "conservative-validation-1node-8ranks")
+        self.assertEqual(run.nodes, 1)
+        self.assertEqual(run.ranks, 8)
+        self.assertEqual(run.rccl_sync_mode, "conservative")
+
+        rows = analyze.summary_rows(run, include_metadata=True)
+        self.assertEqual(rows[0]["rocm_version"], "rocm-6.4.2")
+        self.assertEqual(rows[0]["suite"], "validation")
+        self.assertEqual(rows[0]["timestamp"], "20260712T220219Z")
+        self.assertEqual(rows[0]["path_backend"], "rccl")
+
+    def test_flat_result_path_metadata_remains_supported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result = write_result_dir(
+                root / "results" / "frontier",
+                "20260712T220220Z_mpi-hip_validation-1node-8ranks",
+                metadata_files={
+                    "system-resolution.txt": "build_system=frontier\nbackend=mpi-hip\n"
+                },
+            )
+            run = analyze.load_run(str(result))
+
+        self.assertEqual(run.system, "frontier")
+        self.assertEqual(run.timestamp, "20260712T220220Z")
+        self.assertEqual(run.path_metadata["backend"], "mpi-hip")
+        self.assertEqual(run.nodes, 1)
+        self.assertEqual(run.ranks, 8)
+        self.assertEqual(run.suite, "")
+
+    def test_output_sort_order_uses_result_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runs = [
+                analyze.load_run(
+                    str(
+                        write_result_dir(
+                            root,
+                            "z-stream-two-node",
+                            backend="RCCLBackend",
+                            rccl_sync_mode="stream-ordered",
+                            rocm_version="6.4.2",
+                            nodes_metadata=2,
+                            ranks=16,
+                            timings={4: 4.0e-5, 2: 2.0e-5},
+                        )
+                    )
+                ),
+                analyze.load_run(
+                    str(
+                        write_result_dir(
+                            root,
+                            "a-rccl-conservative-one-node",
+                            backend="RCCLBackend",
+                            rccl_sync_mode="conservative",
+                            rocm_version="6.4.2",
+                            nodes_metadata=1,
+                            ranks=8,
+                            timings={4: 4.0e-5, 2: 2.0e-5},
+                        )
+                    )
+                ),
+                analyze.load_run(
+                    str(
+                        write_result_dir(
+                            root,
+                            "b-mpi-hip-two-node",
+                            rocm_version="6.4.2",
+                            nodes_metadata=2,
+                            ranks=16,
+                            timings={4: 4.0e-5, 2: 2.0e-5},
+                        )
+                    )
+                ),
+                analyze.load_run(
+                    str(
+                        write_result_dir(
+                            root,
+                            "c-stream-one-node",
+                            backend="RCCLBackend",
+                            rccl_sync_mode="stream-ordered",
+                            rocm_version="6.4.2",
+                            nodes_metadata=1,
+                            ranks=8,
+                            timings={4: 4.0e-5, 2: 2.0e-5},
+                        )
+                    )
+                ),
+                analyze.load_run(
+                    str(
+                        write_result_dir(
+                            root,
+                            "d-mpi-hip-one-node",
+                            rocm_version="6.4.2",
+                            nodes_metadata=1,
+                            ranks=8,
+                            timings={4: 4.0e-5, 2: 2.0e-5},
+                        )
+                    )
+                ),
+                analyze.load_run(
+                    str(
+                        write_result_dir(
+                            root,
+                            "e-rccl-conservative-two-node",
+                            backend="RCCLBackend",
+                            rccl_sync_mode="conservative",
+                            rocm_version="6.4.2",
+                            nodes_metadata=2,
+                            ranks=16,
+                            timings={4: 4.0e-5, 2: 2.0e-5},
+                        )
+                    )
+                ),
+            ]
+
+        ordered = analyze.sorted_runs_for_output(runs)
+        self.assertEqual(
+            [
+                (run.backend, run.rccl_sync_mode, run.nodes, run.ranks)
+                for run in ordered
+            ],
+            [
+                ("MPIHIPBackend", "", 1, 8),
+                ("MPIHIPBackend", "", 2, 16),
+                ("RCCLBackend", "conservative", 1, 8),
+                ("RCCLBackend", "conservative", 2, 16),
+                ("RCCLBackend", "stream-ordered", 1, 8),
+                ("RCCLBackend", "stream-ordered", 2, 16),
+            ],
+        )
+
+        rows = [
+            row
+            for run in ordered
+            for row in analyze.summary_rows(run, include_metadata=True)
+        ]
+        self.assertEqual(
+            [
+                (
+                    row["backend"],
+                    row["rccl_sync_mode"],
+                    row["nodes"],
+                    row["ranks"],
+                    row["halo_words"],
+                )
+                for row in rows
+            ],
+            [
+                ("MPIHIPBackend", "", 1, 8, 2),
+                ("MPIHIPBackend", "", 1, 8, 4),
+                ("MPIHIPBackend", "", 2, 16, 2),
+                ("MPIHIPBackend", "", 2, 16, 4),
+                ("RCCLBackend", "conservative", 1, 8, 2),
+                ("RCCLBackend", "conservative", 1, 8, 4),
+                ("RCCLBackend", "conservative", 2, 16, 2),
+                ("RCCLBackend", "conservative", 2, 16, 4),
+                ("RCCLBackend", "stream-ordered", 1, 8, 2),
+                ("RCCLBackend", "stream-ordered", 1, 8, 4),
+                ("RCCLBackend", "stream-ordered", 2, 16, 2),
+                ("RCCLBackend", "stream-ordered", 2, 16, 4),
+            ],
+        )
+
     def test_node_count_metadata_sources(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -221,6 +404,26 @@ class GhaloAnalyzeTests(unittest.TestCase):
                 )
             )
             self.assertEqual(env_run.nodes, 16)
+
+            requested_run = analyze.load_run(
+                str(
+                    write_result_dir(
+                        root,
+                        "requested",
+                        ranks=8,
+                        metadata_files={
+                            "result-metadata.txt": (
+                                "requested_nodes=1\n"
+                                "requested_ranks=8\n"
+                                "requested_ranks_per_node=8\n"
+                            ),
+                            "environment.txt": "SLURM_JOB_NUM_NODES=2\n",
+                        },
+                    )
+                )
+            )
+            self.assertEqual(requested_run.nodes, 1)
+            self.assertEqual(requested_run.ranks_per_node, 8)
 
     def test_node_count_safe_derivation_and_unknown_warning(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -591,6 +794,52 @@ class GhaloAnalyzeTests(unittest.TestCase):
         self.assertEqual(axis.hlines[0][0][0], 0.0)
         self.assertEqual(axis.ylabel, "Observed Difference (%)")
 
+    def test_percent_difference_pairs_group_compatible_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            mpi_hip = analyze.load_run(
+                str(
+                    write_result_dir(
+                        root,
+                        "mpi-hip-one-node",
+                        nodes_metadata=1,
+                        ranks=8,
+                        rocm_version="6.4.2",
+                    )
+                )
+            )
+            rccl_conservative = analyze.load_run(
+                str(
+                    write_result_dir(
+                        root,
+                        "rccl-conservative-one-node",
+                        backend="RCCLBackend",
+                        rccl_sync_mode="conservative",
+                        nodes_metadata=1,
+                        ranks=8,
+                        rocm_version="6.4.2",
+                    )
+                )
+            )
+            rccl_stream = analyze.load_run(
+                str(
+                    write_result_dir(
+                        root,
+                        "rccl-stream-two-node",
+                        backend="RCCLBackend",
+                        rccl_sync_mode="stream-ordered",
+                        nodes_metadata=2,
+                        ranks=16,
+                        rocm_version="6.4.2",
+                    )
+                )
+            )
+
+        pairs = analyze.percent_difference_pairs(
+            [rccl_stream, rccl_conservative, mpi_hip]
+        )
+        self.assertEqual(pairs, [(mpi_hip, rccl_conservative)])
+
     def test_publication_option_parsing_and_output_format(self) -> None:
         args = analyze.build_parser().parse_args(
             [
@@ -654,10 +903,66 @@ class GhaloAnalyzeTests(unittest.TestCase):
             self.assertTrue((output_dir / "report.md").exists())
             self.assertTrue((output_dir / "summary.csv").exists())
             self.assertTrue((output_dir / "summary.json").exists())
+            self.assertTrue((output_dir / "summary.md").exists())
             self.assertTrue((output_dir / "scaling.csv").exists())
             provenance = json.loads((output_dir / "provenance.json").read_text())
             self.assertTrue(provenance["skipped_outputs"])
             self.assertTrue(skipped)
+
+    def test_report_writes_pairwise_percent_difference_exports(self) -> None:
+        real_import = builtins.__import__
+
+        def blocked_import(name, *args, **kwargs):
+            if name == "matplotlib" or name.startswith("matplotlib."):
+                raise ImportError("blocked for test")
+            return real_import(name, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            mpi_hip = write_result_dir(
+                root,
+                "mpi-hip-one-node",
+                nodes_metadata=1,
+                ranks=8,
+                rocm_version="6.4.2",
+                timings={2: 1.0e-5, 4: 2.0e-5},
+            )
+            rccl = write_result_dir(
+                root,
+                "rccl-one-node",
+                backend="RCCLBackend",
+                rccl_sync_mode="conservative",
+                nodes_metadata=1,
+                ranks=8,
+                rocm_version="6.4.2",
+                timings={2: 1.1e-5, 4: 2.2e-5},
+            )
+            output_dir = root / "report"
+            args = Namespace(
+                output_dir=str(output_dir),
+                style="publication",
+                x_axis="auto",
+                legend_position="auto",
+                dpi=None,
+                baseline="smallest-nodes",
+                baseline_path=None,
+                baseline_nodes=None,
+                inputs=[str(mpi_hip), str(rccl)],
+            )
+            runs = [analyze.load_run(str(mpi_hip)), analyze.load_run(str(rccl))]
+            with mock.patch("builtins.__import__", side_effect=blocked_import):
+                skipped = analyze.write_report_directory(args, runs)
+
+            comparison_exports = sorted((output_dir / "comparisons").glob("*.csv"))
+            self.assertEqual(len(comparison_exports), 1)
+            self.assertIn("percent-difference", comparison_exports[0].name)
+            self.assertIn(
+                "observed_percent_difference",
+                comparison_exports[0].read_text(encoding="utf-8"),
+            )
+            provenance = json.loads((output_dir / "provenance.json").read_text())
+            self.assertEqual(len(provenance["percent_difference_comparisons"]), 1)
+            self.assertTrue(any("percent-difference" in item for item in skipped))
 
     def test_percent_difference_requires_exactly_two_inputs(self) -> None:
         run = analyze.load_run(str(DATA / "repeat_a"))

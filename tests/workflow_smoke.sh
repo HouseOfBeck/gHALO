@@ -135,6 +135,13 @@ test_result_path_helpers() (
     "${root}/results/frontier/rocm-6.4.2/validation/20260712T000000Z_rccl_conservative_validation_2" \
     "${result_dir}" \
     "result path avoids collisions"
+  result_dir="$(ghalo_unique_result_dir \
+    "${root}" frontier 6.4.2 validation \
+    20260712T000001Z rccl rccl_rccl_stream-ordered)"
+  assert_eq \
+    "${root}/results/frontier/rocm-6.4.2/validation/20260712T000001Z_rccl_stream-ordered" \
+    "${result_dir}" \
+    "result path removes repeated duplicate backend labels"
 )
 
 # This test intentionally modifies the active system inside a subshell while
@@ -161,6 +168,21 @@ test_frontier_rccl_cmake_args() (
     "Frontier rccl uses Cray wrapper"
   assert_contains '-DCMAKE_HIP_ARCHITECTURES=gfx90a' "${output}" \
     "Frontier rccl sets HIP architecture"
+)
+
+test_frontier_launch_uses_exact_node_steps() (
+  # shellcheck source=../scripts/systems/frontier.sh
+  source "${ROOT}/scripts/systems/frontier.sh"
+
+  local output="${GHALO_TEST_TMPDIR}/ghalo-frontier-launch.txt"
+  ghalo_system_launch mpi-hip 1 8 8 "" /repo/ghalo --backend mpi-hip \
+    >"${output}"
+  assert_contains 'srun' "${output}" "Frontier launch uses srun"
+  assert_contains '--exact' "${output}" "Frontier launch constrains exact step resources"
+  assert_contains '-N' "${output}" "Frontier launch includes node count flag"
+  assert_contains '1' "${output}" "Frontier launch includes requested one-node count"
+  assert_contains '--ntasks-per-node' "${output}" \
+    "Frontier launch includes ranks-per-node flag"
 )
 
 # This test mocks Frontier modules to verify backend-specific ROCm selection
@@ -544,6 +566,21 @@ test_submit_dry_run() (
   assert_contains "scripts/batch-job.sh ${ROOT}" \
     "${output}" "repo root follows batch-job path"
   assert_contains 'dry\ run\ label' "${output}" "label is shell escaped"
+
+  GHALO_SYSTEM_NAME=frontier "${ROOT}/scripts/submit.sh" \
+    --backend rccl \
+    --account TEST123 \
+    --nodes 1 \
+    --ranks 8 \
+    --ranks-per-node 8 \
+    --time 00:05:00 \
+    --target-seconds 0.1 \
+    --label "rccl_stream-ordered" \
+    --dry-run >"${output}"
+  assert_contains '--job-name ghalo-frontier-rccl-stream-ordered' \
+    "${output}" "submit normalizes duplicated RCCL job-name labels"
+  assert_not_contains '--job-name ghalo-frontier-rccl-rccl_' \
+    "${output}" "submit job name avoids duplicated RCCL prefix"
 )
 
 test_submit_rank_layout_failure() (
@@ -662,6 +699,47 @@ test_run_loop_uses_results_for_benchmarks() (
     "run_loop retains harness diagnostic helper"
 )
 
+test_generate_analysis_report_wrapper() (
+  local output="${GHALO_TEST_TMPDIR}/ghalo-generate-analysis-report-help.txt"
+  "${ROOT}/scripts/generate_analysis_report.sh" --help >"${output}"
+  assert_contains 'Usage: scripts/generate_analysis_report.sh --input RESULT_DIR --output ANALYSIS_DIR' \
+    "${output}" "analysis report wrapper usage"
+  assert_contains 'results/frontier/rocm-6.4.2/validation' \
+    "${output}" "analysis report wrapper documents baseline input"
+  assert_contains 'analysis/frontier-rocm-6.4.2-validation' \
+    "${output}" "analysis report wrapper documents baseline output"
+)
+
+test_validation_suite_verifies_results() (
+  local suite="${ROOT}/scripts/run_validation_suite.sh"
+  local output="${GHALO_TEST_TMPDIR}/ghalo-validation-suite-help.txt"
+  "${suite}" --help >"${output}"
+  assert_contains 'Usage: scripts/run_validation_suite.sh' \
+    "${output}" "validation suite usage"
+  assert_contains 'MPI-HIP 1 node' "${output}" \
+    "validation suite documents MPI-HIP 1-node case"
+  assert_contains 'RCCL stream-ordered 2 nodes' "${output}" \
+    "validation suite documents RCCL stream-ordered case"
+  assert_contains 'command -v jq' "${suite}" \
+    "validation suite requires jq"
+  assert_contains 'validation_passed != true' "${suite}" \
+    "validation suite checks validation_passed"
+  assert_contains 'validation_enabled != true' "${suite}" \
+    "validation suite checks validation_enabled"
+  assert_contains 'detected node count mismatch' "${suite}" \
+    "validation suite checks detected topology"
+  assert_contains 'requested_nodes' "${suite}" \
+    "validation suite checks requested node metadata"
+  assert_contains "require_metadata_key \"\${result_metadata}\" rocm_version" \
+    "${suite}" "validation suite checks ROCm metadata"
+  assert_contains 'PASS:' "${suite}" \
+    "validation suite prints pass summary"
+  assert_contains 'FAIL:' "${suite}" \
+    "validation suite prints fail summary"
+  assert_contains 'exit 1' "${suite}" \
+    "validation suite fails when cases fail"
+)
+
 test_migrate_results_dry_run() (
   local flat="${GHALO_TEST_TMPDIR}/results/frontier/20260712T000000Z_rccl_rccl_conservative"
   local output="${GHALO_TEST_TMPDIR}/ghalo-migrate-results.txt"
@@ -683,6 +761,18 @@ EOF
     printf 'migration destination should not contain duplicated backend name\n' >&2
     exit 1
   fi
+
+  mkdir -p "${GHALO_TEST_TMPDIR}/results/frontier/rocm-6.4.2/validation/20260712T000000Z_rccl_conservative"
+  python3 "${ROOT}/tools/migrate_results.py" --dry-run \
+    --root "${GHALO_TEST_TMPDIR}" "${GHALO_TEST_TMPDIR}/results/frontier" \
+    >"${output}"
+  assert_contains \
+    "results/frontier/rocm-6.4.2/validation/20260712T000000Z_rccl_conservative_2" \
+    "${output}" "migration collision suffix keeps normalized stem"
+  if sed -n 's/^.* -> //p' "${output}" | grep -Fq 'rccl_rccl'; then
+    printf 'migration collision destination should not contain duplicated backend name\n' >&2
+    exit 1
+  fi
 )
 
 test_borg_build_alias_resolution
@@ -693,6 +783,7 @@ test_backend_validation_accepts_rccl
 test_result_path_helpers
 test_borg_rccl_uses_frontier_build_alias
 test_frontier_rccl_cmake_args
+test_frontier_launch_uses_exact_node_steps
 test_frontier_backend_specific_rocm_selection
 test_frontier_rccl_mixed_rocm_versions_fail
 test_borg_environment_setup
@@ -703,4 +794,6 @@ test_submit_rank_layout_failure
 test_batch_job_requires_slurm
 test_batch_job_uses_explicit_repo_root_from_spool_copy
 test_run_loop_uses_results_for_benchmarks
+test_generate_analysis_report_wrapper
+test_validation_suite_verifies_results
 test_migrate_results_dry_run

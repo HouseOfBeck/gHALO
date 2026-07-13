@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ghalo/backend.hpp"
+#include "ghalo/halo_range.hpp"
 
 #include <cstddef>
 #include <optional>
@@ -9,9 +10,9 @@
 namespace ghalo {
 
 struct BenchmarkConfig {
-  std::size_t min_halo = 2;
-  std::size_t max_halo = 1024;
-  std::size_t halo_multiplier = 2;
+  std::size_t min_halo = default_min_halo;
+  std::size_t max_halo = default_max_halo;
+  std::size_t halo_multiplier = default_halo_multiplier;
   std::vector<std::size_t> halo_lengths{};
   double target_seconds = 3.0;
   int calibration_iterations = 5;

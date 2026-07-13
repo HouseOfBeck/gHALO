@@ -10,6 +10,7 @@ import json
 import math
 import os
 import platform
+import re
 import statistics
 import subprocess
 import sys
@@ -19,6 +20,9 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 GIB = 1024.0**3
+KNOWN_BACKENDS = ("mpi-hip", "rccl", "mpi")
+RUN_NAME_RE = re.compile(r"^(?P<timestamp>\d{8}T\d{6}Z)_(?P<rest>.+)$")
+VERSION_RE = re.compile(r"^(?:rocm-)?\d+(?:\.\d+)+(?:[-._A-Za-z0-9]*)?$")
 
 REQUIRED_FIELDS = (
     "backend",
@@ -132,7 +136,7 @@ class Run:
 
     @property
     def backend(self) -> str:
-        return self.results[0].backend if self.results else ""
+        return self.results[0].backend if self.results else self.path_metadata.get("backend", "")
 
     @property
     def algorithm(self) -> str:
@@ -147,21 +151,44 @@ class Run:
     @property
     def rccl_sync_mode(self) -> str:
         if not self.results:
-            return ""
-        return str(self.results[0].metadata.get("rccl_sync_mode", ""))
+            return self.path_metadata.get("rccl_sync_mode", "")
+        return (
+            str(self.results[0].metadata.get("rccl_sync_mode", ""))
+            or self.meta_value("rccl_sync_mode")
+            or self.path_metadata.get("rccl_sync_mode", "")
+        )
 
     @property
     def rocm_version(self) -> str:
         if not self.results:
-            return ""
-        return str(self.results[0].metadata.get("rocm_version", ""))
+            return self.path_metadata.get("rocm_version", "")
+        return (
+            str(self.results[0].metadata.get("rocm_version", ""))
+            or self.meta_value("rocm_version")
+            or self.path_metadata.get("rocm_version", "")
+        )
+
+    @property
+    def suite(self) -> str:
+        return (
+            self.meta_value("suite")
+            or self.meta_value("result_category")
+            or self.path_metadata.get("suite", "")
+        )
+
+    @property
+    def timestamp(self) -> str:
+        return self.meta_value("timestamp") or self.path_metadata.get("timestamp", "")
 
     @property
     def ranks(self) -> Optional[int]:
         if not self.results:
-            return None
+            return parse_int(self.path_metadata.get("ranks"))
         value = self.results[0].topology.get("world_size")
-        return int(value) if value not in (None, "") else None
+        parsed = parse_int(value)
+        if parsed is not None:
+            return parsed
+        return parse_int(self.path_metadata.get("ranks"))
 
     @property
     def rows(self) -> Optional[int]:
@@ -185,7 +212,11 @@ class Run:
 
     @property
     def system(self) -> str:
-        return self.meta_value("active_system") or infer_system_from_path(self.result_path)
+        return (
+            self.meta_value("active_system")
+            or self.path_metadata.get("system", "")
+            or infer_system_from_path(self.result_path)
+        )
 
     @property
     def build_system(self) -> str:
@@ -193,6 +224,12 @@ class Run:
 
     @property
     def nodes(self) -> Optional[int]:
+        requested = parse_int(
+            self.meta_value("requested_nodes", from_file="result-metadata.txt")
+        )
+        if requested is not None:
+            return requested
+
         explicit = self.first_result_metadata_int(
             "nodes",
             "node_count",
@@ -216,6 +253,10 @@ class Run:
             if parsed is not None:
                 return parsed
 
+        parsed = parse_int(self.path_metadata.get("nodes"))
+        if parsed is not None:
+            return parsed
+
         ranks = self.ranks
         ranks_per_node = self.ranks_per_node
         if ranks and ranks_per_node and ranks % ranks_per_node == 0:
@@ -231,6 +272,11 @@ class Run:
         )
         if explicit is not None:
             return explicit
+        requested = parse_int(
+            self.meta_value("requested_ranks_per_node", from_file="result-metadata.txt")
+        )
+        if requested is not None:
+            return requested
         value = self.meta_value(
             "ranks_per_node",
             "tasks_per_node",
@@ -314,6 +360,10 @@ class Run:
                         return slurm_values[key]
         return None
 
+    @property
+    def path_metadata(self) -> Dict[str, str]:
+        return infer_path_metadata(self.result_path)
+
 
 def parse_int(value: Optional[str]) -> Optional[int]:
     if value in (None, ""):
@@ -345,6 +395,78 @@ def infer_system_from_path(path: Path) -> str:
     return ""
 
 
+def split_run_name(name: str) -> Dict[str, str]:
+    match = RUN_NAME_RE.match(name)
+    if not match:
+        return {}
+    rest = match.group("rest")
+    for backend in KNOWN_BACKENDS:
+        if rest == backend:
+            return {"timestamp": match.group("timestamp"), "backend": backend}
+        for separator in ("_", "-"):
+            prefix = backend + separator
+            if rest.startswith(prefix):
+                return {
+                    "timestamp": match.group("timestamp"),
+                    "backend": backend,
+                    "label": rest[len(prefix):],
+                }
+    return {"timestamp": match.group("timestamp"), "label": rest}
+
+
+def infer_rccl_sync_mode(label: str) -> str:
+    lowered = label.lower()
+    if "stream-ordered" in lowered:
+        return "stream-ordered"
+    if "conservative" in lowered:
+        return "conservative"
+    return ""
+
+
+def parse_count_from_label(label: str, unit: str) -> Optional[str]:
+    match = re.search(rf"(\d+)[-_]?{unit}s?\b", label, re.IGNORECASE)
+    return match.group(1) if match else None
+
+
+def infer_path_metadata(path: Path) -> Dict[str, str]:
+    metadata: Dict[str, str] = {}
+    parts = path.parts
+    if "results" in parts:
+        index = parts.index("results")
+        if index + 1 < len(parts):
+            metadata["system"] = parts[index + 1]
+        relative = parts[index + 2:]
+    else:
+        relative = (path.name,)
+
+    if len(relative) >= 3 and VERSION_RE.match(relative[0]):
+        metadata["rocm_version"] = relative[0]
+        metadata["suite"] = relative[1]
+        run_name = relative[2]
+    elif relative:
+        run_name = relative[0]
+    else:
+        run_name = path.name
+
+    run_metadata = split_run_name(run_name)
+    metadata.update(run_metadata)
+    label = run_metadata.get("label", "")
+    backend = run_metadata.get("backend", "")
+    if backend:
+        metadata["backend"] = backend
+    if backend == "rccl":
+        mode = infer_rccl_sync_mode(label)
+        if mode:
+            metadata["rccl_sync_mode"] = mode
+    nodes = parse_count_from_label(label, "node")
+    if nodes:
+        metadata["nodes"] = nodes
+    ranks = parse_count_from_label(label, "rank")
+    if ranks:
+        metadata["ranks"] = ranks
+    return metadata
+
+
 def display_system(system: str) -> str:
     if not system:
         return ""
@@ -363,6 +485,53 @@ def display_backend(backend: str) -> str:
 def plural(count: int, unit: str) -> str:
     suffix = "" if count == 1 else "s"
     return f"{count} {unit}{suffix}"
+
+
+def backend_sort_key(backend: str) -> Tuple[int, str]:
+    lowered = backend.lower()
+    if "mpi" in lowered and "hip" in lowered:
+        return (0, lowered)
+    if "rccl" in lowered:
+        return (1, lowered)
+    if "mpi" in lowered:
+        return (2, lowered)
+    return (9, lowered)
+
+
+def rccl_sync_sort_key(mode: str) -> Tuple[int, str]:
+    lowered = mode.lower()
+    if not lowered:
+        return (0, "")
+    if lowered == "conservative":
+        return (1, lowered)
+    if lowered == "stream-ordered":
+        return (2, lowered)
+    return (3, lowered)
+
+
+def optional_count_sort_key(value: Optional[int]) -> Tuple[int, int]:
+    return (1, 0) if value is None else (0, value)
+
+
+def run_output_sort_key(run: Run) -> Tuple[Any, ...]:
+    return (
+        run.system.lower(),
+        run.rocm_version.lower(),
+        *backend_sort_key(run.backend),
+        *rccl_sync_sort_key(run.rccl_sync_mode),
+        *optional_count_sort_key(run.nodes),
+        *optional_count_sort_key(run.ranks),
+        run.timestamp,
+        str(run.result_path),
+    )
+
+
+def sorted_runs_for_output(runs: Sequence[Run]) -> List[Run]:
+    return sorted(runs, key=run_output_sort_key)
+
+
+def result_output_sort_key(result: RunResult) -> Tuple[int, int]:
+    return (result.total_exchange_bytes_per_rank, result.halo_words)
 
 
 def parse_metadata_text(text: str) -> Dict[str, str]:
@@ -438,6 +607,7 @@ def read_metadata_files(result_path: Path) -> Dict[str, str]:
         "slurm-job.txt",
         "command.txt",
         "exit-status.txt",
+        "result-metadata.txt",
     )
     files: Dict[str, str] = {}
     if result_path.is_dir():
@@ -684,7 +854,7 @@ def summary_rows(
     label_override: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     rows = []
-    for result in sorted(run.results, key=lambda item: item.halo_words):
+    for result in sorted(run.results, key=result_output_sort_key):
         row: Dict[str, Any] = {
             "label": label_override or run.label,
             "system": run.system,
@@ -709,6 +879,12 @@ def summary_rows(
                     "build_system": run.build_system,
                     "git_commit": run.git_commit,
                     "slurm_job_id": run.slurm_job_id,
+                    "rocm_version": run.rocm_version,
+                    "rccl_sync_mode": run.rccl_sync_mode,
+                    "suite": run.suite,
+                    "timestamp": run.timestamp,
+                    "path_backend": run.path_metadata.get("backend", ""),
+                    "path_label": run.path_metadata.get("label", ""),
                     "source_format": run.source_format,
                     "input_path": str(run.input_path),
                 }
@@ -846,7 +1022,7 @@ def format_cell(value: Any) -> str:
 
 
 def command_summarize(args: argparse.Namespace) -> int:
-    runs = load_runs(args.inputs)
+    runs = sorted_runs_for_output(load_runs(args.inputs))
     if args.output_dir:
         write_analysis_directory(args.output_dir, runs)
     rows: List[Dict[str, Any]] = []
@@ -927,6 +1103,59 @@ def run_labels(runs: Sequence[Run], overrides: Sequence[Optional[str]]) -> List[
     return unique
 
 
+def filename_slug(text: str, default: str = "run") -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", text.strip().lower())
+    slug = slug.strip("-_.")
+    return slug or default
+
+
+def run_comparison_slug(run: Run) -> str:
+    parts = [display_backend(run.backend)]
+    if run.rccl_sync_mode:
+        parts.append(run.rccl_sync_mode)
+    if run.nodes is not None:
+        parts.append(f"{run.nodes}node")
+    if run.ranks is not None:
+        parts.append(f"{run.ranks}rank")
+    return filename_slug("-".join(parts))
+
+
+def percent_difference_pair_key(run: Run) -> Tuple[Any, ...]:
+    message_sizes = tuple(
+        (result.halo_words, result.total_exchange_bytes_per_rank)
+        for result in sorted(run.results, key=result_output_sort_key)
+    )
+    return (
+        run.system,
+        run.rocm_version,
+        run.nodes,
+        run.ranks,
+        run.cartesian,
+        message_sizes,
+    )
+
+
+def percent_difference_pairs(runs: Sequence[Run]) -> List[Tuple[Run, Run]]:
+    ordered = sorted_runs_for_output(runs)
+    pairs: List[Tuple[Run, Run]] = []
+    for left_index, left in enumerate(ordered):
+        for right in ordered[left_index + 1:]:
+            if percent_difference_pair_key(left) != percent_difference_pair_key(right):
+                continue
+            if (
+                left.backend == right.backend
+                and left.rccl_sync_mode == right.rccl_sync_mode
+                and left.result_path == right.result_path
+            ):
+                continue
+            try:
+                percent_difference_rows_for_plot([left, right])
+            except AnalysisError:
+                continue
+            pairs.append((left, right))
+    return pairs
+
+
 def compare_rows(a: Run, b: Run, allow_missing: bool = False) -> List[Dict[str, Any]]:
     a_results = results_by_halo(a)
     b_results = results_by_halo(b)
@@ -992,7 +1221,7 @@ def percentile(values: Sequence[float], fraction: float) -> float:
 def compatibility_key(run: Run) -> Tuple[Any, ...]:
     bytes_by_halo = tuple(
         (result.halo_words, result.total_exchange_bytes_per_rank)
-        for result in sorted(run.results, key=lambda item: item.halo_words)
+        for result in sorted(run.results, key=result_output_sort_key)
     )
     return (
         run.backend,
@@ -1056,7 +1285,7 @@ def aggregate_group_metadata(run: Run, key: Tuple[Any, ...], group_by: Sequence[
 
     bytes_by_halo = ";".join(
         f"N={result.halo_words}:{result.total_exchange_bytes_per_rank}B/rank"
-        for result in sorted(run.results, key=lambda item: item.halo_words)
+        for result in sorted(run.results, key=result_output_sort_key)
     )
     label_parts = []
     if run.system:
@@ -1089,18 +1318,32 @@ def aggregate_group_metadata(run: Run, key: Tuple[Any, ...], group_by: Sequence[
 
 def aggregate_rows(runs: List[Run], allow_mixed: bool, group_by: Sequence[str]) -> List[Dict[str, Any]]:
     groups: Dict[Tuple[Any, ...], List[Run]] = {}
-    for run in runs:
+    for run in sorted_runs_for_output(runs):
         key = grouping_key(run, group_by) if allow_mixed and group_by else compatibility_key(run)
         groups.setdefault(key, []).append(run)
     if not allow_mixed and len(groups) > 1:
         raise AnalysisError("aggregate inputs have incompatible configurations; use --allow-mixed to group them")
 
     rows: List[Dict[str, Any]] = []
-    for key, group_runs in groups.items():
+    for key, group_runs in sorted(groups.items(), key=lambda item: run_output_sort_key(item[1][0])):
         group_metadata = aggregate_group_metadata(group_runs[0], key, group_by)
-        halos = sorted({result.halo_words for run in group_runs for result in run.results})
-        for halo in halos:
-            values = [results_by_halo(run)[halo].max_average_seconds for run in group_runs if halo in results_by_halo(run)]
+        halo_sizes: Dict[int, int] = {}
+        for run in group_runs:
+            for result in run.results:
+                previous = halo_sizes.get(result.halo_words)
+                if previous is None:
+                    halo_sizes[result.halo_words] = result.total_exchange_bytes_per_rank
+                else:
+                    halo_sizes[result.halo_words] = min(
+                        previous,
+                        result.total_exchange_bytes_per_rank,
+                    )
+        for halo in sorted(halo_sizes, key=lambda item: (halo_sizes[item], item)):
+            values = [
+                results_by_halo(run)[halo].max_average_seconds
+                for run in group_runs
+                if halo in results_by_halo(run)
+            ]
             if not values:
                 continue
             mean = statistics.fmean(values)
@@ -1123,7 +1366,7 @@ def aggregate_rows(runs: List[Run], allow_mixed: bool, group_by: Sequence[str]) 
 
 
 def command_aggregate(args: argparse.Namespace) -> int:
-    runs = load_runs(args.inputs)
+    runs = sorted_runs_for_output(load_runs(args.inputs))
     rows = aggregate_rows(runs, args.allow_mixed, args.group_by)
     write_output(rows, args.format, args.output)
     write_warnings(runs)
@@ -1152,8 +1395,8 @@ def choose_baseline(args: argparse.Namespace, runs: List[Run]) -> Run:
 def scaling_rows(runs: List[Run], baseline: Run) -> List[Dict[str, Any]]:
     baseline_results = results_by_halo(baseline)
     rows = []
-    for run in runs:
-        for result in sorted(run.results, key=lambda item: item.halo_words):
+    for run in sorted_runs_for_output(runs):
+        for result in sorted(run.results, key=result_output_sort_key):
             base = baseline_results.get(result.halo_words)
             if base is None:
                 continue
@@ -1178,7 +1421,7 @@ def scaling_rows(runs: List[Run], baseline: Run) -> List[Dict[str, Any]]:
 
 
 def command_scaling(args: argparse.Namespace) -> int:
-    runs = load_runs(args.inputs)
+    runs = sorted_runs_for_output(load_runs(args.inputs))
     baseline = choose_baseline(args, runs)
     rows = scaling_rows(runs, baseline)
     write_output(rows, args.format, args.output)
@@ -1395,6 +1638,8 @@ def output_dpi(style: str, output_format: str, dpi: Optional[int]) -> Optional[i
 
 def command_plot(args: argparse.Namespace) -> int:
     runs = load_runs(args.inputs)
+    if args.kind != "percent-difference":
+        runs = sorted_runs_for_output(runs)
     overrides = label_overrides(args, len(runs))
     x_axis_request = getattr(args, "x_axis", "auto")
     style = getattr(args, "style", "default")
@@ -1525,6 +1770,7 @@ def checksum(path: Path) -> Optional[str]:
 
 
 def write_analysis_directory(output_root: str, runs: List[Run]) -> None:
+    runs = sorted_runs_for_output(runs)
     output_dir = Path(output_root) / "analysis"
     plots_dir = output_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
@@ -1581,6 +1827,7 @@ def analysis_git_commit() -> str:
 
 
 def write_report_directory(args: argparse.Namespace, runs: List[Run]) -> List[str]:
+    runs = sorted_runs_for_output(runs)
     output_dir = Path(args.output_dir)
     if output_dir.exists() and not output_dir.is_dir():
         raise AnalysisError(f"report output path exists but is not a directory: {output_dir}")
@@ -1589,6 +1836,7 @@ def write_report_directory(args: argparse.Namespace, runs: List[Run]) -> List[st
         raise AnalysisError(f"report output directory is not writable: {output_dir}")
     plots_dir = output_dir / "plots"
     plots_dir.mkdir(exist_ok=True)
+    comparisons_dir = output_dir / "comparisons"
 
     skipped: List[str] = []
     summary = [row for run in runs for row in summary_rows(run, True, True)]
@@ -1597,11 +1845,13 @@ def write_report_directory(args: argparse.Namespace, runs: List[Run]) -> List[st
         json.dumps(summary, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    (output_dir / "summary.md").write_text(rows_to_markdown(summary), encoding="utf-8")
 
     baseline = choose_baseline(args, runs)
     scaling = scaling_rows(runs, baseline)
     (output_dir / "scaling.csv").write_text(rows_to_csv(scaling), encoding="utf-8")
 
+    comparison_pairs = percent_difference_pairs(runs)
     if len(runs) == 2:
         try:
             comparison = compare_rows(runs[0], runs[1], allow_missing=False)
@@ -1614,6 +1864,19 @@ def write_report_directory(args: argparse.Namespace, runs: List[Run]) -> List[st
     else:
         skipped.append("comparison.csv: requires exactly two compatible repeat runs")
 
+    written_comparisons: List[str] = []
+    if comparison_pairs:
+        comparisons_dir.mkdir(exist_ok=True)
+    for index, (left, right) in enumerate(comparison_pairs, start=1):
+        stem = (
+            f"percent-difference-{index:02d}-"
+            f"{run_comparison_slug(left)}-vs-{run_comparison_slug(right)}"
+        )
+        rows = percent_difference_rows_for_plot([left, right])
+        output = comparisons_dir / f"{stem}.csv"
+        output.write_text(rows_to_csv(rows), encoding="utf-8")
+        written_comparisons.append(str(output.relative_to(output_dir)))
+
     plot_requests = [
         ("latency", plots_dir / "latency.png"),
         ("effective-rate", plots_dir / "effective-rate.png"),
@@ -1621,14 +1884,9 @@ def write_report_directory(args: argparse.Namespace, runs: List[Run]) -> List[st
     ]
     if len(runs) == 2:
         plot_requests.append(("percent-difference", plots_dir / "percent-difference.png"))
-    if any(run.phase_timing_enabled for run in runs):
-        plot_requests.append(("phase", plots_dir / "phase.png"))
 
     for kind, output in plot_requests:
         plot_inputs = [str(run.result_path) for run in runs]
-        if kind == "phase":
-            phase_run = next(run for run in runs if run.phase_timing_enabled)
-            plot_inputs = [str(phase_run.result_path)]
         plot_args = argparse.Namespace(
             kind=kind,
             xscale="log2",
@@ -1652,6 +1910,65 @@ def write_report_directory(args: argparse.Namespace, runs: List[Run]) -> List[st
         except AnalysisError as error:
             skipped.append(f"{output.relative_to(output_dir)}: {error}")
 
+    for index, (left, right) in enumerate(comparison_pairs, start=1):
+        stem = (
+            f"percent-difference-{index:02d}-"
+            f"{run_comparison_slug(left)}-vs-{run_comparison_slug(right)}"
+        )
+        output = plots_dir / f"{stem}.png"
+        plot_args = argparse.Namespace(
+            kind="percent-difference",
+            xscale="log2",
+            yscale="linear",
+            x_axis=args.x_axis,
+            style=args.style,
+            format="png",
+            legend_position=args.legend_position,
+            title=None,
+            label=[],
+            labels=None,
+            output=str(output),
+            dpi=args.dpi,
+            baseline=args.baseline,
+            baseline_path=args.baseline_path,
+            baseline_nodes=args.baseline_nodes,
+            inputs=[str(left.result_path), str(right.result_path)],
+        )
+        try:
+            command_plot(plot_args)
+        except AnalysisError as error:
+            skipped.append(f"{output.relative_to(output_dir)}: {error}")
+
+    phase_runs = [run for run in runs if run.phase_timing_enabled]
+    for index, run in enumerate(phase_runs, start=1):
+        output = (
+            plots_dir / "phase.png"
+            if len(phase_runs) == 1
+            else plots_dir / f"phase-{index:02d}-{run_comparison_slug(run)}.png"
+        )
+        plot_args = argparse.Namespace(
+            kind="phase",
+            xscale="log2",
+            yscale="linear",
+            x_axis=args.x_axis,
+            style=args.style,
+            format="png",
+            legend_position=args.legend_position,
+            title=None,
+            label=[],
+            labels=None,
+            output=str(output),
+            dpi=args.dpi,
+            baseline=args.baseline,
+            baseline_path=args.baseline_path,
+            baseline_nodes=args.baseline_nodes,
+            inputs=[str(run.result_path)],
+        )
+        try:
+            command_plot(plot_args)
+        except AnalysisError as error:
+            skipped.append(f"{output.relative_to(output_dir)}: {error}")
+
     provenance = {
         "input_paths": [str(run.input_path) for run in runs],
         "input_checksums": {str(run.input_path): checksum(run.input_path) for run in runs},
@@ -1660,6 +1977,7 @@ def write_report_directory(args: argparse.Namespace, runs: List[Run]) -> List[st
         "generation_time_utc": datetime.now(timezone.utc).isoformat(),
         "python_version": platform.python_version(),
         "matplotlib_version": matplotlib_version(),
+        "percent_difference_comparisons": written_comparisons,
         "skipped_outputs": skipped,
     }
     (output_dir / "provenance.json").write_text(
@@ -1683,11 +2001,14 @@ def write_report_directory(args: argparse.Namespace, runs: List[Run]) -> List[st
             "",
             "- `summary.csv`",
             "- `summary.json`",
+            "- `summary.md`",
             "- `scaling.csv`",
         ]
     )
     if (output_dir / "comparison.csv").exists():
         lines.append("- `comparison.csv`")
+    if written_comparisons:
+        lines.append("- `comparisons/`")
     lines.append("- `plots/` when matplotlib is available")
     lines.extend(["", "## Skipped Outputs", ""])
     lines.extend(f"- {item}" for item in skipped) if skipped else lines.append("- None")

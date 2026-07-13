@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <stdexcept>
@@ -54,6 +55,15 @@ private:
   double now_ = 0.0;
   int exchanges_ = 0;
 };
+
+ghalo::CliOptions parse_cli(std::vector<std::string> args) {
+  std::vector<char*> argv;
+  argv.reserve(args.size());
+  for (auto& arg : args) {
+    argv.push_back(arg.data());
+  }
+  return ghalo::parse_cli_options(static_cast<int>(argv.size()), argv.data());
+}
 
 struct ConceptualTopology {
   int rank;
@@ -166,7 +176,23 @@ void test_bytes_per_rank_consistency() {
 }
 
 void test_halo_length_generation() {
-  const auto defaults = ghalo::generate_halo_lengths(2, 1024, 2);
+  static_assert(ghalo::default_min_halo == 2);
+  static_assert(ghalo::default_max_halo == 1024);
+  static_assert(ghalo::default_halo_multiplier == 2);
+
+  const ghalo::BenchmarkConfig benchmark_defaults;
+  assert(benchmark_defaults.min_halo == ghalo::default_min_halo);
+  assert(benchmark_defaults.max_halo == ghalo::default_max_halo);
+  assert(benchmark_defaults.halo_multiplier == ghalo::default_halo_multiplier);
+
+  const auto cli_defaults = parse_cli({"ghalo"});
+  assert(cli_defaults.min_halo == ghalo::default_min_halo);
+  assert(cli_defaults.max_halo == ghalo::default_max_halo);
+  assert(cli_defaults.halo_multiplier == ghalo::default_halo_multiplier);
+
+  const auto defaults = ghalo::generate_halo_lengths(
+      ghalo::default_min_halo, ghalo::default_max_halo,
+      ghalo::default_halo_multiplier);
   const std::vector<std::size_t> expected_defaults{2,   4,   8,   16, 32,
                                                    64,  128, 256, 512,
                                                    1024};
@@ -175,6 +201,10 @@ void test_halo_length_generation() {
   const auto extended = ghalo::generate_halo_lengths(2, 262144, 2);
   assert(extended.front() == 2);
   assert(extended.back() == 262144);
+
+  const auto non_power_of_two = ghalo::generate_halo_lengths(3, 100, 3);
+  const std::vector<std::size_t> expected_non_power_of_two{3, 9, 27, 81};
+  assert(non_power_of_two == expected_non_power_of_two);
 
   bool threw = false;
   try {
@@ -195,6 +225,16 @@ void test_halo_length_generation() {
   threw = false;
   try {
     (void)ghalo::generate_halo_lengths(2, 1024, 1);
+  } catch (const std::invalid_argument&) {
+    threw = true;
+  }
+  assert(threw);
+
+  threw = false;
+  try {
+    (void)ghalo::generate_halo_lengths(
+        std::numeric_limits<std::size_t>::max() / 2 + 1,
+        std::numeric_limits<std::size_t>::max(), 2);
   } catch (const std::invalid_argument&) {
     threw = true;
   }
@@ -386,6 +426,16 @@ void test_cli_phase_timing_parse() {
   assert(halo_options.max_halo == 262144);
   assert(halo_options.halo_multiplier == 4);
 
+  for (const std::string backend : {"mpi", "mpi-hip", "rccl"}) {
+    const auto range_options =
+        parse_cli({"ghalo", "--backend", backend, "--min-halo", "8",
+                   "--max-halo", "512", "--halo-multiplier", "4"});
+    assert(range_options.backend == backend);
+    assert(range_options.min_halo == 8);
+    assert(range_options.max_halo == 512);
+    assert(range_options.halo_multiplier == 4);
+  }
+
   const char* rccl_stage_argv_storage[] = {"ghalo", "--backend", "rccl",
                                            "--rccl-stage-b"};
   auto* rccl_stage_argv = const_cast<char**>(rccl_stage_argv_storage);
@@ -415,6 +465,17 @@ void test_cli_phase_timing_parse() {
     bad_halo_threw = true;
   }
   assert(bad_halo_threw);
+
+  const char* bad_multiplier_argv_storage[] = {"ghalo", "--halo-multiplier",
+                                               "1"};
+  auto* bad_multiplier_argv = const_cast<char**>(bad_multiplier_argv_storage);
+  bool bad_multiplier_threw = false;
+  try {
+    (void)ghalo::parse_cli_options(3, bad_multiplier_argv);
+  } catch (const std::invalid_argument&) {
+    bad_multiplier_threw = true;
+  }
+  assert(bad_multiplier_threw);
 
   const char* bad_argv_storage[] = {"ghalo", "--phase-timing", "--csv"};
   auto* bad_argv = const_cast<char**>(bad_argv_storage);

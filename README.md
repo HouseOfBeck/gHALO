@@ -270,6 +270,11 @@ GHALO_SYSTEM_NAME=frontier scripts/submit.sh \
   --validate
 ```
 
+For the Frontier ROCm 6.4.2 validation workflow, including build commands,
+`sbatch slurm/validation.sbatch`, result paths, report generation, and the
+baseline tag, see
+[Frontier ROCm 6.4.2 Validation Workflow](docs/BUILD_AND_RUN.md#frontier-rocm-642-validation-workflow).
+
 GitHub Actions validate portable CPU-only, OpenMPI, and shell workflow paths.
 See [Continuous Integration](docs/CI.md).
 
