@@ -267,5 +267,6 @@ Stage D: phase timing and comparison.
 
 Stage E: Borg scaling, then Frontier scaling.
 
-- Validate Borg with Frontier build reuse.
+- Validate Borg with native Borg builds, and use `GHALO_BUILD_SYSTEM_ALIAS`
+  only for explicit cross-system artifact tests.
 - Scale on Frontier after correctness is established.

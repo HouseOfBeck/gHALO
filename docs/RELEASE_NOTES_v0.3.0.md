@@ -94,9 +94,10 @@ GHALO_SYSTEM_NAME=frontier scripts/submit.sh \
   --label frontier-64node
 ```
 
-Borg runs use `GHALO_SYSTEM_NAME=borg` and write results under `results/borg/`
-while reusing compatible Frontier build trees unless native Borg builds are
-requested.
+Borg runs use `GHALO_SYSTEM_NAME=borg`, resolve native Borg build artifacts by
+default, and write results under `results/borg/`. Set
+`GHALO_BUILD_SYSTEM_ALIAS=frontier` only when intentionally testing compatible
+Frontier build artifacts on Borg.
 
 ## Example Analysis Command
 

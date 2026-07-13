@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+
+# Source this file from an interactive Borg shell:
+#
+#   source scripts/setenv.borg
+#
+# It prepares a clean, reproducible Borg environment for gHALO GPU builds and
+# runs without setting user-specific paths.
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  printf 'scripts/setenv.borg must be sourced, not executed.\n' >&2
+  exit 1
+fi
+
+if ! type module >/dev/null 2>&1; then
+  printf 'Borg environment setup requires the environment modules command.\n' >&2
+  return 1
+fi
+
+module purge
+module load PrgEnv-cray
+module load craype-accel-amd-gfx90a
+module load rocm/6.4.2
+
+export GHALO_SYSTEM_NAME=borg
+export GHALO_ROCM_VERSION=6.4.2
+export GHALO_LOADED_ROCM_MODULE=rocm/6.4.2
+
+if [[ -n "${ROCM_PATH:-}" ]]; then
+  export RCCL_ROOT="${ROCM_PATH}"
+fi
+
+printf 'gHALO Borg environment prepared with rocm/6.4.2.\n'

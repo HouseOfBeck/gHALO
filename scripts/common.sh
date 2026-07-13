@@ -188,7 +188,7 @@ ghalo_require_binary() {
   local build_system="$3"
   local backend="$4"
   [[ -x "${binary}" ]] ||
-    ghalo_die "missing executable '${binary}' for active system '${active_system}' using build system '${build_system}'. Build it first with scripts/build.sh --system ${build_system} --backend ${backend}, or set GHALO_USE_NATIVE_BUILD=1 to use a native ${active_system} build."
+    ghalo_die "missing executable '${binary}' for active system '${active_system}' using build system '${build_system}'. Build it first with scripts/build.sh --system ${build_system} --backend ${backend}, or set GHALO_BUILD_SYSTEM_ALIAS=<system> to intentionally use another build tree."
 }
 
 ghalo_write_system_resolution() {
@@ -248,7 +248,6 @@ ghalo_capture_environment() {
     for name in \
       GHALO_SYSTEM_NAME \
       GHALO_BUILD_SYSTEM_ALIAS \
-      GHALO_USE_NATIVE_BUILD \
       GHALO_SUBMIT_COMMAND \
       GHALO_BATCH_STDOUT \
       GHALO_BATCH_STDERR \

@@ -222,7 +222,10 @@ if [[ -n "${rccl_sync_mode}" ]]; then
   ghalo_args+=(--rccl-sync-mode "${rccl_sync_mode}")
 fi
 
-mapfile -t launch_command < <(
+launch_command=()
+while IFS= read -r launch_arg; do
+  launch_command+=("${launch_arg}")
+done < <(
   ghalo_system_launch \
     "${backend}" \
     "${nodes}" \

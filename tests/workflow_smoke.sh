@@ -53,18 +53,18 @@ assert_not_contains() {
 test_borg_build_alias_resolution() (
   export GHALO_ACTIVE_SYSTEM=borg
   unset GHALO_BUILD_SYSTEM_ALIAS
-  unset GHALO_USE_NATIVE_BUILD
   # shellcheck source=../scripts/systems/borg.sh
   source "${ROOT}/scripts/systems/borg.sh"
 
-  assert_eq frontier "$(ghalo_system_build_alias mpi)" "Borg default alias"
+  assert_eq borg "$(ghalo_system_build_alias mpi)" "Borg default alias"
+  assert_eq borg "$(ghalo_system_build_alias mpi-hip)" "Borg MPI-HIP alias"
 
   export GHALO_BUILD_SYSTEM_ALIAS=frontier-test
   assert_eq frontier-test "$(ghalo_system_build_alias mpi)" \
     "explicit build alias"
 
-  export GHALO_USE_NATIVE_BUILD=1
-  assert_eq borg "$(ghalo_system_build_alias mpi)" "native Borg build"
+  unset GHALO_BUILD_SYSTEM_ALIAS
+  assert_eq borg "$(ghalo_system_build_alias mpi)" "Borg returns to native alias"
 )
 
 # This test intentionally mutates GHALO_ACTIVE_SYSTEM inside a subshell so the
@@ -95,14 +95,14 @@ test_system_resolution_metadata() (
   ghalo_write_system_resolution \
     "${output}" \
     borg \
-    frontier \
+    borg \
     mpi-hip \
-    /repo/builds/frontier/mpi-hip/ghalo
+    /repo/builds/borg/mpi-hip/ghalo
 
   assert_contains 'active_system=borg' "${output}" "active system metadata"
-  assert_contains 'build_system=frontier' "${output}" "build system metadata"
+  assert_contains 'build_system=borg' "${output}" "build system metadata"
   assert_contains 'backend=mpi-hip' "${output}" "backend metadata"
-  assert_contains 'binary=/repo/builds/frontier/mpi-hip/ghalo' \
+  assert_contains 'binary=/repo/builds/borg/mpi-hip/ghalo' \
     "${output}" "binary metadata"
 )
 
@@ -145,17 +145,94 @@ test_result_path_helpers() (
 )
 
 # This test intentionally modifies the active system inside a subshell while
-# verifying Borg's default build alias behavior.
+# verifying Borg's default RCCL build alias behavior.
 # shellcheck disable=SC2030,SC2031
-test_borg_rccl_uses_frontier_build_alias() (
+test_borg_rccl_uses_native_build_alias() (
   export GHALO_ACTIVE_SYSTEM=borg
   unset GHALO_BUILD_SYSTEM_ALIAS
-  unset GHALO_USE_NATIVE_BUILD
   # shellcheck source=../scripts/systems/borg.sh
   source "${ROOT}/scripts/systems/borg.sh"
 
-  assert_eq frontier "$(ghalo_system_build_alias rccl)" \
+  assert_eq borg "$(ghalo_system_build_alias rccl)" \
     "Borg rccl default alias"
+
+  export GHALO_BUILD_SYSTEM_ALIAS=frontier
+  assert_eq frontier "$(ghalo_system_build_alias rccl)" \
+    "Borg rccl explicit alias"
+)
+
+# This test intentionally modifies PATH inside a subshell while mocking Slurm.
+# shellcheck disable=SC2030,SC2031
+test_borg_run_uses_native_build_resolution() (
+  local bin_dir="${GHALO_TEST_TMPDIR}/ghalo-borg-run-bin"
+  local output="${GHALO_TEST_TMPDIR}/ghalo-borg-run-output.txt"
+  local result_dir
+  mkdir -p "${bin_dir}" "${ROOT}/builds/borg/mpi"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"${bin_dir}/CC"
+  cat >"${bin_dir}/srun" <<'EOF'
+#!/usr/bin/env bash
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --exact)
+      shift
+      ;;
+    -N | -n | --ntasks-per-node)
+      shift 2
+      ;;
+    *)
+      exec "$@"
+      ;;
+  esac
+done
+EOF
+  cat >"${ROOT}/builds/borg/mpi/ghalo" <<'EOF'
+#!/usr/bin/env bash
+csv=""
+json=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --csv)
+      csv="$2"
+      shift 2
+      ;;
+    --json)
+      json="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+[[ -n "${csv}" ]] && printf 'halo_length,iterations,max_average_time_seconds\n' >"${csv}"
+[[ -n "${json}" ]] && printf '{"results":[]}\n' >"${json}"
+EOF
+  chmod +x "${bin_dir}/CC" "${bin_dir}/srun" \
+    "${ROOT}/builds/borg/mpi/ghalo"
+  export PATH="${bin_dir}:${PATH}"
+
+  unset GHALO_BUILD_SYSTEM_ALIAS
+  GHALO_SYSTEM_NAME=borg "${ROOT}/scripts/run.sh" \
+    --backend mpi \
+    --nodes 1 \
+    --ranks 1 \
+    --ranks-per-node 1 \
+    --target-seconds 0.1 \
+    --label native-resolution-smoke >"${output}" 2>&1
+
+  result_dir="$(sed -n 's/^Result directory: //p' "${output}")"
+  [[ -n "${result_dir}" && -d "${result_dir}" ]] ||
+    { printf 'Borg run did not produce a result directory\n' >&2; exit 1; }
+  assert_contains 'active_system=borg' "${result_dir}/system-resolution.txt" \
+    "Borg run active system"
+  assert_contains 'build_system=borg' "${result_dir}/system-resolution.txt" \
+    "Borg run native build system"
+  assert_contains 'backend=mpi' "${result_dir}/system-resolution.txt" \
+    "Borg run backend"
+  assert_contains "${ROOT}/builds/borg/mpi/ghalo" \
+    "${result_dir}/system-resolution.txt" "Borg run native binary path"
+  assert_not_contains "${ROOT}/builds/frontier/mpi/ghalo" \
+    "${result_dir}/system-resolution.txt" "Borg run avoids Frontier binary path"
 )
 
 test_frontier_rccl_cmake_args() (
@@ -781,7 +858,8 @@ test_missing_aliased_binary_error
 test_system_resolution_metadata
 test_backend_validation_accepts_rccl
 test_result_path_helpers
-test_borg_rccl_uses_frontier_build_alias
+test_borg_rccl_uses_native_build_alias
+test_borg_run_uses_native_build_resolution
 test_frontier_rccl_cmake_args
 test_frontier_launch_uses_exact_node_steps
 test_frontier_backend_specific_rocm_selection

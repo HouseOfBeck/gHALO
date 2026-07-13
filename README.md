@@ -244,10 +244,12 @@ GHALO_SYSTEM_NAME=frontier scripts/run.sh \
 ```
 
 Borg, Frontier's hot-spare cabinet, is supported as a first-class system
-profile. Borg runs write results under `results/borg/` while reusing compatible
-Frontier build trees by default:
+profile. Build resolution defaults to the active system, so Borg runs use
+`builds/borg/<backend>/ghalo` and write results under `results/borg/`:
 
 ```sh
+source scripts/setenv.borg
+GHALO_SYSTEM_NAME=borg scripts/build.sh --backend mpi-hip
 GHALO_SYSTEM_NAME=borg scripts/run.sh \
   --backend mpi-hip \
   --nodes 1 \
@@ -255,6 +257,9 @@ GHALO_SYSTEM_NAME=borg scripts/run.sh \
   --ranks-per-node 8 \
   --validate
 ```
+
+Intentional cross-system artifact testing is still available with an explicit
+override, for example `export GHALO_BUILD_SYSTEM_ALIAS=frontier`.
 
 Batch submission is available through Slurm `sbatch` while preserving the same
 run workflow and result metadata:

@@ -309,9 +309,10 @@ binary:        builds/<system>/<backend>/ghalo
 results:       results/<system>/
 ```
 
-A system profile may define a build alias when two systems share compatible
-hardware, software, and filesystems. In that case, `run.sh` still writes results
-under the active system, but resolves the binary from the aliased build system:
+Set `GHALO_BUILD_SYSTEM_ALIAS=<name>` only when intentionally testing
+cross-system artifacts on compatible hardware, software, and filesystems. In
+that case, `run.sh` still writes results under the active system, but resolves
+the binary from the aliased build system:
 
 ```text
 active system: borg
@@ -328,16 +329,13 @@ system-resolution.txt
 
 with fields for `active_system`, `build_system`, `backend`, and `binary`.
 
-Profiles may honor `GHALO_BUILD_SYSTEM_ALIAS=<name>` for explicit aliasing and
-`GHALO_USE_NATIVE_BUILD=1` to force the active system's own build tree.
-
-For Borg RCCL experiments, the default build alias also points to Frontier:
+For example, this explicitly runs on Borg while using Frontier build artifacts:
 
 ```text
 active system: borg
 build system:  frontier
 binary:        builds/frontier/rccl/ghalo
-results:       results/borg/<timestamp>_rccl_<label>/
+results:       results/borg/rocm-<version>/<category>/<timestamp>_rccl_<label>/
 ```
 
 Inspect RCCL availability on Frontier or Borg with:
@@ -640,19 +638,27 @@ launch command within that allocation.
 
 Borg is a Frontier hot-spare cabinet. Borg compute blades are
 hardware-identical to Frontier compute blades, and Borg shares the same NFS
-filesystem as Frontier. Because the hardware, filesystem, Cray programming
-environment, Cray MPICH, and `gfx90a` GPU target are compatible, the Borg
-profile reuses Frontier build trees by default:
+filesystem as Frontier. Build resolution defaults to the active system, so the
+Borg profile uses Borg-native build trees by default:
 
 ```text
-builds/frontier/mpi/ghalo
-builds/frontier/mpi-hip/ghalo
-results/borg/<timestamp>_mpi_<label>/
-results/borg/<timestamp>_mpi-hip_<label>/
+builds/borg/mpi/ghalo
+builds/borg/mpi-hip/ghalo
+results/borg/rocm-<version>/<category>/<timestamp>_mpi_<label>/
+results/borg/rocm-<version>/<category>/<timestamp>_mpi-hip_<label>/
 ```
 
-This keeps Frontier and Borg result histories separate while avoiding duplicate
-builds for identical binaries.
+This keeps build provenance and result histories aligned with the active
+system. To prepare a clean Borg environment for GPU builds and runs:
+
+```sh
+source scripts/setenv.borg
+```
+
+The helper purges existing modules, loads the Borg Cray programming
+environment, loads `craype-accel-amd-gfx90a`, selects `rocm/6.4.2`, and exports
+the standard gHALO Borg/ROCm metadata variables. It does not set user-specific
+paths.
 
 Borg CPU MPI smoke run:
 
@@ -747,15 +753,16 @@ The Borg profile:
 - avoids unvalidated GPU-binding options;
 - does not hard-code Cray MPICH paths.
 
-To create Borg-native builds instead of using Frontier builds:
+Intentional cross-system artifact testing remains available through
+`GHALO_BUILD_SYSTEM_ALIAS`. For example, to run on Borg with explicitly selected
+Frontier build artifacts:
 
 ```sh
-GHALO_SYSTEM_NAME=borg scripts/build.sh --backend mpi
-GHALO_SYSTEM_NAME=borg scripts/build.sh --backend mpi-hip
-GHALO_USE_NATIVE_BUILD=1 GHALO_SYSTEM_NAME=borg scripts/run.sh --backend mpi-hip
+export GHALO_BUILD_SYSTEM_ALIAS=frontier
+GHALO_SYSTEM_NAME=borg scripts/run.sh --backend mpi-hip
 ```
 
-With `GHALO_USE_NATIVE_BUILD=1`, Borg runs resolve binaries from:
+Without that explicit override, Borg runs resolve binaries from:
 
 ```text
 builds/borg/<backend>/ghalo

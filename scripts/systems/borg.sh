@@ -163,12 +163,10 @@ EOF
 }
 
 ghalo_system_build_alias() {
-  if [[ "${GHALO_USE_NATIVE_BUILD:-0}" == "1" ]]; then
-    printf '%s\n' "${GHALO_ACTIVE_SYSTEM}"
-  elif [[ -n "${GHALO_BUILD_SYSTEM_ALIAS:-}" ]]; then
+  if [[ -n "${GHALO_BUILD_SYSTEM_ALIAS:-}" ]]; then
     printf '%s\n' "${GHALO_BUILD_SYSTEM_ALIAS}"
   else
-    printf '%s\n' frontier
+    printf '%s\n' "${GHALO_ACTIVE_SYSTEM}"
   fi
 }
 
