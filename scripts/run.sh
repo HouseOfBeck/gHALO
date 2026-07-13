@@ -247,12 +247,15 @@ ghalo_write_system_resolution "${result_dir}/system-resolution.txt" \
   printf 'result_category=%s\n' "${category}"
   printf 'rocm_version=%s\n' "${rocm_version}"
   printf 'loaded_rocm_module=%s\n' "${GHALO_LOADED_ROCM_MODULE:-}"
+  printf 'mpich_gpu_support_enabled=%s\n' "${MPICH_GPU_SUPPORT_ENABLED:-0}"
+  printf 'mpich_smp_single_copy_mode=%s\n' "${MPICH_SMP_SINGLE_COPY_MODE:-}"
   printf 'min_halo=%s\n' "${min_halo}"
   printf 'max_halo=%s\n' "${max_halo}"
   printf 'halo_multiplier=%s\n' "${halo_multiplier}"
   printf 'requested_nodes=%s\n' "${nodes}"
   printf 'requested_ranks=%s\n' "${ranks}"
   printf 'requested_ranks_per_node=%s\n' "${ranks_per_node:-}"
+  printf 'git_commit=%s\n' "$(git rev-parse HEAD 2>/dev/null || echo unknown)"
 } >"${result_dir}/result-metadata.txt"
 if [[ -n "${GHALO_SUBMIT_COMMAND:-}" || -n "${SLURM_JOB_ID:-}" ]]; then
   {

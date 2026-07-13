@@ -19,8 +19,15 @@ fi
 
 module purge
 module load PrgEnv-cray
+module load craype-x86-trento
 module load craype-accel-amd-gfx90a
 module load rocm/6.4.2
+export MPICH_GPU_SUPPORT_ENABLED=1
+# Borg MPI-HIP workaround:
+# # Cray MPICH CH4 shared-memory single-copy path fails with
+# # process_vm_readv: Bad address on MI250X GPU buffers.
+# # Disable it and use the safe path.
+export MPICH_SMP_SINGLE_COPY_MODE=NONE
 
 export GHALO_SYSTEM_NAME=borg
 export GHALO_ROCM_VERSION=6.4.2
