@@ -300,6 +300,10 @@ run_validation_case() {
     return
   fi
 
+  if [[ -x "${SCRIPT_DIR}/capture_environment.sh" ]]; then
+    "${SCRIPT_DIR}/capture_environment.sh" "${result_dir}"
+  fi
+
   if verify_output="$(verify_result_bundle "${label}" "${result_dir}" \
       "${expected_backend}" "${nodes}" "${ranks}" "${ranks_per_node}" \
       "${sync_mode}" 2>&1)"; then

@@ -18,6 +18,8 @@ ghalo.json
 results/*
 !results/reference/
 
+environment-capture-*/
+
 # macOS
 .DS_Store
 ._*
