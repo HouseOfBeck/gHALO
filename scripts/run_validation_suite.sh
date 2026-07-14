@@ -141,6 +141,18 @@ require_metadata_key() {
   }
 }
 
+capture_result_environment() {
+  local result_dir="$1"
+  local capture_script="${root}/scripts/capture_environment.sh"
+
+  if [[ ! -x "${capture_script}" ]]; then
+    return 0
+  fi
+  if ! "${capture_script}" "${result_dir}" >/dev/null; then
+    printf 'WARNING: environment capture failed for %s\n' "${result_dir}" >&2
+  fi
+}
+
 verify_result_bundle() {
   local label="$1"
   local result_dir="$2"
@@ -300,9 +312,7 @@ run_validation_case() {
     return
   fi
 
-  if [[ -x "${SCRIPT_DIR}/capture_environment.sh" ]]; then
-    "${SCRIPT_DIR}/capture_environment.sh" "${result_dir}"
-  fi
+  capture_result_environment "${result_dir}"
 
   if verify_output="$(verify_result_bundle "${label}" "${result_dir}" \
       "${expected_backend}" "${nodes}" "${ranks}" "${ranks_per_node}" \

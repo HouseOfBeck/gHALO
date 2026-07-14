@@ -787,6 +787,30 @@ test_generate_analysis_report_wrapper() (
     "${output}" "analysis report wrapper documents baseline output"
 )
 
+test_capture_environment_explicit_output_dir() (
+  local output_dir="${GHALO_TEST_TMPDIR}/ghalo-environment-capture"
+  local stdout="${GHALO_TEST_TMPDIR}/ghalo-environment-capture-stdout.txt"
+  local expected="Environment captured in ${output_dir}/environment.txt"
+
+  env PATH="/usr/bin:/bin" \
+    "${ROOT}/scripts/capture_environment.sh" "${output_dir}" >"${stdout}"
+
+  [[ -f "${output_dir}/environment.txt" ]] ||
+    { printf 'environment capture did not create environment.txt\n' >&2; exit 1; }
+  assert_eq "${expected}" "$(<"${stdout}")" \
+    "environment capture concise stdout"
+  assert_contains '## Timestamp' "${output_dir}/environment.txt" \
+    "environment capture timestamp section"
+  assert_contains '## Git' "${output_dir}/environment.txt" \
+    "environment capture git section"
+  assert_contains '## ROCm devices' "${output_dir}/environment.txt" \
+    "environment capture ROCm section"
+  assert_contains 'NOTE: command unavailable: rocm-smi' \
+    "${output_dir}/environment.txt" "missing rocm-smi is nonfatal"
+  assert_not_contains 'Architecture:' "${stdout}" \
+    "environment capture does not print lscpu to stdout"
+)
+
 test_validation_suite_verifies_results() (
   local suite="${ROOT}/scripts/run_validation_suite.sh"
   local output="${GHALO_TEST_TMPDIR}/ghalo-validation-suite-help.txt"
@@ -807,6 +831,10 @@ test_validation_suite_verifies_results() (
     "validation suite checks detected topology"
   assert_contains 'requested_nodes' "${suite}" \
     "validation suite checks requested node metadata"
+  assert_contains 'capture_result_environment' "${suite}" \
+    "validation suite captures environment best effort"
+  assert_contains 'WARNING: environment capture failed' "${suite}" \
+    "validation suite warns on environment capture failure"
   assert_contains "require_metadata_key \"\${result_metadata}\" rocm_version" \
     "${suite}" "validation suite checks ROCm metadata"
   assert_contains 'PASS:' "${suite}" \
@@ -873,5 +901,6 @@ test_batch_job_requires_slurm
 test_batch_job_uses_explicit_repo_root_from_spool_copy
 test_run_loop_uses_results_for_benchmarks
 test_generate_analysis_report_wrapper
+test_capture_environment_explicit_output_dir
 test_validation_suite_verifies_results
 test_migrate_results_dry_run
