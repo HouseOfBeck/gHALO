@@ -335,7 +335,9 @@ void MPIHIPBackend::setup(std::size_t halo_words) {
 
   launch_fill_rank(hoew_.data(), buffer_words, rank());
   hip_check(hipDeviceSynchronize(), "hipDeviceSynchronize after setup fill");
+}
 
+void MPIHIPBackend::validate_current_halo() {
   if (validate_) {
     validate_exchange();
   }

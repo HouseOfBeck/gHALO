@@ -65,6 +65,9 @@ std::vector<BenchmarkResult> run_benchmark(Backend& backend,
   if (config.calibration_iterations <= 0) {
     throw std::invalid_argument("calibration_iterations must be positive");
   }
+  if (config.samples_per_halo == 0) {
+    throw std::invalid_argument("samples_per_halo must be positive");
+  }
 
   const std::vector<std::size_t> halo_lengths =
       config.halo_lengths.empty()
@@ -73,7 +76,7 @@ std::vector<BenchmarkResult> run_benchmark(Backend& backend,
           : config.halo_lengths;
 
   std::vector<BenchmarkResult> results;
-  results.reserve(halo_lengths.size());
+  results.reserve(halo_lengths.size() * config.samples_per_halo);
 
   for (const std::size_t halo_words : halo_lengths) {
     backend.setup(halo_words);
@@ -95,33 +98,40 @@ std::vector<BenchmarkResult> run_benchmark(Backend& backend,
     const int iterations =
         std::max(config.calibration_iterations, estimated_iterations);
 
-    if (backend.phase_timing_enabled()) {
-      backend.reset_phase_timing();
-    }
+    for (std::size_t sample = 1; sample <= config.samples_per_halo; ++sample) {
+      backend.validate_current_halo();
 
-    backend.barrier();
-    const double measured_local = time_exchanges(backend, iterations);
-    const double measured_max = backend.max_time(measured_local);
+      if (backend.phase_timing_enabled()) {
+        backend.reset_phase_timing();
+      }
 
-    BenchmarkResult result;
-    result.backend = backend.name();
-    result.algorithm = backend.algorithm();
-    result.halo_words = halo_words;
-    result.word_bytes = sizeof(float);
-    result.n_message_bytes = halo_words * result.word_bytes;
-    result.two_n_message_bytes = 2 * halo_words * result.word_bytes;
-    result.total_exchange_bytes_per_rank = 6 * halo_words * result.word_bytes;
-    result.iterations = iterations;
-    result.max_total_seconds = measured_max;
-    result.max_average_seconds = measured_max / static_cast<double>(iterations);
-    result.topology = backend.topology();
-    result.metadata = backend.metadata();
-    if (backend.phase_timing_enabled()) {
-      result.phase_timing =
-          backend.phase_timing_result(iterations, result.max_average_seconds);
+      backend.barrier();
+      const double measured_local = time_exchanges(backend, iterations);
+      const double measured_max = backend.max_time(measured_local);
+
+      BenchmarkResult result;
+      result.backend = backend.name();
+      result.algorithm = backend.algorithm();
+      result.halo_words = halo_words;
+      result.word_bytes = sizeof(float);
+      result.n_message_bytes = halo_words * result.word_bytes;
+      result.two_n_message_bytes = 2 * halo_words * result.word_bytes;
+      result.total_exchange_bytes_per_rank = 6 * halo_words * result.word_bytes;
+      result.iterations = iterations;
+      result.sample_index = sample;
+      result.sample_count = config.samples_per_halo;
+      result.max_total_seconds = measured_max;
+      result.max_average_seconds =
+          measured_max / static_cast<double>(iterations);
+      result.topology = backend.topology();
       result.metadata = backend.metadata();
+      if (backend.phase_timing_enabled()) {
+        result.phase_timing =
+            backend.phase_timing_result(iterations, result.max_average_seconds);
+        result.metadata = backend.metadata();
+      }
+      results.push_back(result);
     }
-    results.push_back(result);
   }
 
   return results;

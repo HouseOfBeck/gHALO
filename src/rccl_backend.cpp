@@ -323,6 +323,9 @@ bool RCCLBackend::is_root() const { return topology_.world_rank == 0; }
 void RCCLBackend::setup(std::size_t halo_words) {
   halo_words_ = halo_words;
   allocate_buffers(halo_words_);
+}
+
+void RCCLBackend::validate_current_halo() {
   if (validate_) {
     if (stage_b_only_) {
       validate_north_south();
@@ -435,6 +438,7 @@ void RCCLBackend::run_development_validation(
 
   for (const auto halo_words : halo_lengths) {
     setup(halo_words);
+    validate_current_halo();
   }
 
   int local_ok = 1;
@@ -1043,7 +1047,7 @@ void RCCLBackend::print_validation_summary() const {
     return;
   }
   std::cout << "RCCL full halo validation PASSED for "
-            << validated_halo_count_ << " halo size"
+            << validated_halo_count_ << " validation check"
             << (validated_halo_count_ == 1 ? "" : "s")
             << " in " << sync_mode_name(sync_mode_) << " mode\n";
   validation_summary_printed_ = true;

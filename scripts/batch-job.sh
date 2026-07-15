@@ -4,13 +4,13 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/batch-job.sh REPO_ROOT SYSTEM BACKEND ACCOUNT PARTITION NODES RANKS RANKS_PER_NODE TARGET_SECONDS MIN_HALO MAX_HALO HALO_MULTIPLIER VALIDATE PHASE_TIMING RCCL_STAGE_B RCCL_SYNC_MODE CATEGORY LABEL EXTRA_SRUN_ARGS SUBMIT_COMMAND BATCH_STDOUT BATCH_STDERR
+Usage: scripts/batch-job.sh REPO_ROOT SYSTEM BACKEND ACCOUNT PARTITION NODES RANKS RANKS_PER_NODE TARGET_SECONDS MIN_HALO MAX_HALO HALO_MULTIPLIER SAMPLES_PER_HALO VALIDATE PHASE_TIMING RCCL_STAGE_B RCCL_SYNC_MODE CATEGORY LABEL EXTRA_SRUN_ARGS SUBMIT_COMMAND BATCH_STDOUT BATCH_STDERR
 EOF
 }
 
 [[ -n "${SLURM_JOB_ID:-}" ]] ||
   { echo "gHALO batch-job error: SLURM_JOB_ID is not set; this script must run inside a Slurm job" >&2; exit 1; }
-[[ $# -eq 22 ]] || { usage >&2; exit 2; }
+[[ $# -eq 23 ]] || { usage >&2; exit 2; }
 
 repo_root="$1"
 system="$2"
@@ -24,16 +24,17 @@ target_seconds="$9"
 min_halo="${10}"
 max_halo="${11}"
 halo_multiplier="${12}"
-validate="${13}"
-phase_timing="${14}"
-rccl_stage_b="${15}"
-rccl_sync_mode="${16}"
-category="${17}"
-label="${18}"
-extra_srun_args="${19}"
-submit_command="${20}"
-batch_stdout="${21}"
-batch_stderr="${22}"
+samples_per_halo="${13}"
+validate="${14}"
+phase_timing="${15}"
+rccl_stage_b="${16}"
+rccl_sync_mode="${17}"
+category="${18}"
+label="${19}"
+extra_srun_args="${20}"
+submit_command="${21}"
+batch_stdout="${22}"
+batch_stderr="${23}"
 
 [[ "${repo_root}" = /* ]] ||
   { echo "gHALO batch-job error: REPO_ROOT must be an absolute path: ${repo_root}" >&2; exit 2; }
@@ -80,6 +81,7 @@ gHALO batch job
   min_halo: ${min_halo}
   max_halo: ${max_halo}
   halo_multiplier: ${halo_multiplier}
+  samples_per_halo: ${samples_per_halo}
   category: ${category}
   rccl_sync_mode: ${rccl_sync_mode}
   allocated_nodes: ${SLURM_JOB_NODELIST:-}
@@ -97,6 +99,7 @@ run_args=(
   --min-halo "${min_halo}"
   --max-halo "${max_halo}"
   --halo-multiplier "${halo_multiplier}"
+  --samples-per-halo "${samples_per_halo}"
   --label "${label}"
 )
 

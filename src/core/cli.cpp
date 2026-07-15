@@ -35,7 +35,8 @@ void print_usage(std::ostream& out) {
       << "             [--validate|--no-validate] [--allow-gpu-oversubscription]\n"
       << "             [--phase-timing] [--rccl-stage-b]\n"
       << "             [--rccl-sync-mode conservative|stream-ordered]\n"
-      << "             [--min-halo N] [--max-halo N] [--halo-multiplier N]\n";
+      << "             [--min-halo N] [--max-halo N] [--halo-multiplier N]\n"
+      << "             [--samples-per-halo N]\n";
 }
 
 CliOptions parse_cli_options(int argc, char** argv) {
@@ -65,6 +66,9 @@ CliOptions parse_cli_options(int argc, char** argv) {
         throw std::invalid_argument(
             "--halo-multiplier must be greater than 1");
       }
+    } else if (arg == "--samples-per-halo" && i + 1 < argc) {
+      options.samples_per_halo =
+          parse_positive_size(argv[++i], "--samples-per-halo");
     } else if (arg == "--device-map" && i + 1 < argc) {
       options.device_map = argv[++i];
     } else if (arg == "--rccl-sync-mode" && i + 1 < argc) {

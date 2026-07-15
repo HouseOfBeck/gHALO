@@ -67,6 +67,7 @@ int main(int argc, char** argv) {
     config.min_halo = options.min_halo;
     config.max_halo = options.max_halo;
     config.halo_multiplier = options.halo_multiplier;
+    config.samples_per_halo = options.samples_per_halo;
 
     if (options.rccl_stage_b) {
       if (options.backend != "rccl") {

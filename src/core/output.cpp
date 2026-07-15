@@ -68,6 +68,15 @@ bool has_phase_timing(const std::vector<BenchmarkResult>& results) {
   return false;
 }
 
+bool has_multiple_samples(const std::vector<BenchmarkResult>& results) {
+  for (const auto& result : results) {
+    if (result.sample_count > 1) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool has_input_device_copy_phase(const std::vector<BenchmarkResult>& results) {
   for (const auto& result : results) {
     if (result.phase_timing.has_value() &&
@@ -164,6 +173,9 @@ void write_console(std::ostream& out,
   if (!metadata.rccl_sync_mode.empty()) {
     out << "RCCL sync mode: " << metadata.rccl_sync_mode << "\n";
   }
+  if (has_multiple_samples(results)) {
+    out << "Samples per halo: " << results.front().sample_count << "\n";
+  }
   out << "Ranks: " << topo.world_size << " as a " << topo.rows << " x "
       << topo.cols << " periodic Cartesian grid\n\n";
 
@@ -189,14 +201,22 @@ void write_console(std::ostream& out,
     out << "\n";
   }
 
-  out << std::setw(8) << "N" << std::setw(14) << "iters" << std::setw(18)
+  const bool multi_sample = has_multiple_samples(results);
+  out << std::setw(8) << "N";
+  if (multi_sample) {
+    out << std::setw(10) << "sample";
+  }
+  out << std::setw(14) << "iters" << std::setw(18)
       << "max avg seconds" << std::setw(14) << "bytes/rank" << "\n";
-  out << std::string(54, '-') << "\n";
+  out << std::string(multi_sample ? 64 : 54, '-') << "\n";
 
   out << std::scientific << std::setprecision(6);
   for (const auto& result : results) {
-    out << std::setw(8) << result.halo_words << std::setw(14)
-        << result.iterations << std::setw(18)
+    out << std::setw(8) << result.halo_words;
+    if (multi_sample) {
+      out << std::setw(10) << result.sample_index;
+    }
+    out << std::setw(14) << result.iterations << std::setw(18)
         << result.max_average_seconds << std::setw(14)
         << result.total_exchange_bytes_per_rank << "\n";
   }
@@ -210,13 +230,16 @@ void write_console(std::ostream& out,
     out << "\n" << phase_timing_label(results.front())
         << " (microseconds, max average per rank):\n";
     out << std::setw(8) << "N";
+    if (multi_sample) {
+      out << std::setw(10) << "sample";
+    }
     if (stream_ordered_phases) {
       out << std::setw(18) << "ns_enqueue_us" << std::setw(22)
           << "transpose_enqueue_us" << std::setw(18) << "ew_enqueue_us"
           << std::setw(18) << "final_sync_us" << std::setw(16)
           << "phase_sum_us" << std::setw(14) << "total_us" << std::setw(22)
           << "total_minus_sum_us" << "\n";
-      out << std::string(136, '-') << "\n";
+      out << std::string(multi_sample ? 146 : 136, '-') << "\n";
     } else {
       if (include_input_copy) {
         out << std::setw(16) << "input_copy_us";
@@ -227,7 +250,10 @@ void write_console(std::ostream& out,
           << std::setw(14) << "ew_sync_us" << std::setw(16)
           << "phase_sum_us" << std::setw(14) << "total_us" << std::setw(22)
           << "total_minus_sum_us" << "\n";
-      out << std::string(include_input_copy ? 156 : 140, '-') << "\n";
+      out << std::string((include_input_copy ? 156 : 140) +
+                         (multi_sample ? 10 : 0),
+                         '-')
+          << "\n";
     }
     for (const auto& result : results) {
       if (!result.phase_timing.has_value()) {
@@ -236,6 +262,9 @@ void write_console(std::ostream& out,
       const auto& phase = *result.phase_timing;
       constexpr double us = 1.0e6;
       out << std::setw(8) << result.halo_words;
+      if (multi_sample) {
+        out << std::setw(10) << result.sample_index;
+      }
       if (stream_ordered_phases) {
         out << std::setw(18)
             << phase.north_south_communication_enqueue_seconds * us
@@ -274,7 +303,8 @@ void write_csv(const std::string& path,
   out << "version,backend,algorithm,world_size,rows,cols,halo_words,"
          "word_bytes,n_message_bytes,two_n_message_bytes,"
          "total_exchange_bytes_per_rank,iterations,max_total_seconds,"
-         "max_average_seconds,root_world_rank,root_cart_rank,root_row,"
+         "max_average_seconds,sample_index,sample_count,root_world_rank,"
+         "root_cart_rank,root_row,"
          "root_col,root_north,root_south,root_east,root_west,"
          "memory_location,mpi_library_version,hip_runtime_version,"
          "rocm_version,rccl_sync_mode,synchronization_model,validation_enabled,"
@@ -311,9 +341,10 @@ void write_csv(const std::string& path,
         << result.two_n_message_bytes << ','
         << result.total_exchange_bytes_per_rank << ',' << result.iterations
         << ',' << result.max_total_seconds << ','
-        << result.max_average_seconds << ',' << result.topology.world_rank
-        << ',' << result.topology.cart_rank << ',' << result.topology.row
-        << ',' << result.topology.col << ',' << result.topology.north << ','
+        << result.max_average_seconds << ',' << result.sample_index << ','
+        << result.sample_count << ',' << result.topology.world_rank << ','
+        << result.topology.cart_rank << ',' << result.topology.row << ','
+        << result.topology.col << ',' << result.topology.north << ','
         << result.topology.south << ',' << result.topology.east << ','
         << result.topology.west << ',' << result.metadata.memory_location
         << ',';
@@ -386,6 +417,8 @@ void write_json(const std::string& path,
     out << "      \"total_exchange_bytes_per_rank\": "
         << r.total_exchange_bytes_per_rank << ",\n";
     out << "      \"iterations\": " << r.iterations << ",\n";
+    out << "      \"sample_index\": " << r.sample_index << ",\n";
+    out << "      \"sample_count\": " << r.sample_count << ",\n";
     out << "      \"max_total_seconds\": " << r.max_total_seconds << ",\n";
     out << "      \"max_average_seconds\": " << r.max_average_seconds
         << ",\n";

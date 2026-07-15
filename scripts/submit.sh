@@ -25,6 +25,7 @@ Options:
   --min-halo N                  Minimum halo length. Default: 2.
   --max-halo N                  Maximum halo length. Default: 1024.
   --halo-multiplier N           Halo length multiplier. Default: 2.
+  --samples-per-halo N          Independent timed samples per halo. Default: 1.
   --validate                    Pass --validate to gHALO.
   --phase-timing                Pass --phase-timing to gHALO.
   --rccl-stage-b                Run RCCL north/south Stage B validation only.
@@ -73,6 +74,7 @@ target_seconds="3"
 min_halo="2"
 max_halo="1024"
 halo_multiplier="2"
+samples_per_halo="1"
 validate=0
 phase_timing=0
 rccl_stage_b=0
@@ -152,6 +154,11 @@ while [[ $# -gt 0 ]]; do
     --halo-multiplier)
       [[ $# -ge 2 ]] || ghalo_die "--halo-multiplier requires a value"
       halo_multiplier="$2"
+      shift 2
+      ;;
+    --samples-per-halo)
+      [[ $# -ge 2 ]] || ghalo_die "--samples-per-halo requires a value"
+      samples_per_halo="$2"
       shift 2
       ;;
     --validate)
@@ -281,6 +288,8 @@ is_positive_integer "${min_halo}" || ghalo_die "--min-halo must be a positive in
 is_positive_integer "${max_halo}" || ghalo_die "--max-halo must be a positive integer"
 is_positive_integer "${halo_multiplier}" ||
   ghalo_die "--halo-multiplier must be a positive integer"
+is_positive_integer "${samples_per_halo}" ||
+  ghalo_die "--samples-per-halo must be a positive integer"
 [[ "${halo_multiplier}" -gt 1 ]] ||
   ghalo_die "--halo-multiplier must be greater than 1"
 [[ "${max_halo}" -ge "${min_halo}" ]] ||
@@ -364,6 +373,7 @@ sbatch_command+=(
   "${min_halo}"
   "${max_halo}"
   "${halo_multiplier}"
+  "${samples_per_halo}"
   "${validate}"
   "${phase_timing}"
   "${rccl_stage_b}"

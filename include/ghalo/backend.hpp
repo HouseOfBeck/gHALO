@@ -123,6 +123,7 @@ public:
   virtual bool is_root() const = 0;
 
   virtual void setup(std::size_t halo_words) = 0;
+  virtual void validate_current_halo() {}
   virtual void exchange() = 0;
   virtual void barrier() = 0;
   virtual double now() const = 0;

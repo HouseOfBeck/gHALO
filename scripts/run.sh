@@ -22,6 +22,7 @@ Options:
   --min-halo N               Minimum halo length. Default: 2.
   --max-halo N               Maximum halo length. Default: 1024.
   --halo-multiplier N        Halo length multiplier. Default: 2.
+  --samples-per-halo N       Independent timed samples per halo. Default: 1.
   --validate                 Pass --validate to gHALO.
   --phase-timing             Pass --phase-timing to gHALO.
   --rccl-stage-b             Run RCCL north/south Stage B validation only.
@@ -43,6 +44,7 @@ target_seconds="3"
 min_halo="2"
 max_halo="1024"
 halo_multiplier="2"
+samples_per_halo="1"
 validate=false
 phase_timing=false
 rccl_stage_b=false
@@ -96,6 +98,11 @@ while [[ $# -gt 0 ]]; do
     --halo-multiplier)
       [[ $# -ge 2 ]] || ghalo_die "--halo-multiplier requires a value"
       halo_multiplier="$2"
+      shift 2
+      ;;
+    --samples-per-halo)
+      [[ $# -ge 2 ]] || ghalo_die "--samples-per-halo requires a value"
+      samples_per_halo="$2"
       shift 2
       ;;
     --validate)
@@ -157,7 +164,7 @@ if [[ -n "${ranks_per_node}" &&
       ( ! "${ranks_per_node}" =~ ^[0-9]+$ || "${ranks_per_node}" -lt 1 ) ]]; then
   ghalo_die "--ranks-per-node must be a positive integer"
 fi
-for value_name in min_halo max_halo halo_multiplier; do
+for value_name in min_halo max_halo halo_multiplier samples_per_halo; do
   value="${!value_name}"
   if [[ ! "${value}" =~ ^[0-9]+$ || "${value}" -lt 1 ]]; then
     ghalo_die "--${value_name//_/-} must be a positive integer"
@@ -206,6 +213,7 @@ ghalo_args=(
   --min-halo "${min_halo}"
   --max-halo "${max_halo}"
   --halo-multiplier "${halo_multiplier}"
+  --samples-per-halo "${samples_per_halo}"
   --csv "${result_dir}/ghalo.csv"
   --json "${result_dir}/ghalo.json"
 )
@@ -252,6 +260,7 @@ ghalo_write_system_resolution "${result_dir}/system-resolution.txt" \
   printf 'min_halo=%s\n' "${min_halo}"
   printf 'max_halo=%s\n' "${max_halo}"
   printf 'halo_multiplier=%s\n' "${halo_multiplier}"
+  printf 'samples_per_halo=%s\n' "${samples_per_halo}"
   printf 'requested_nodes=%s\n' "${nodes}"
   printf 'requested_ranks=%s\n' "${ranks}"
   printf 'requested_ranks_per_node=%s\n' "${ranks_per_node:-}"

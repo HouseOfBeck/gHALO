@@ -680,7 +680,7 @@ test_submit_rank_layout_failure() (
 test_batch_job_requires_slurm() (
   local output="${GHALO_TEST_TMPDIR}/ghalo-batch-job-no-slurm.txt"
   if env -u SLURM_JOB_ID "${ROOT}/scripts/batch-job.sh" \
-    "${ROOT}" frontier mpi TEST123 batch 1 4 4 0.1 2 1024 2 0 0 0 "" "" smoke "" submit out err \
+    "${ROOT}" frontier mpi TEST123 batch 1 4 4 0.1 2 1024 2 1 0 0 0 "" "" smoke "" submit out err \
     >"${output}" 2>&1; then
     printf 'expected batch-job without SLURM_JOB_ID to fail\n' >&2
     exit 1
@@ -722,6 +722,7 @@ EOF
     2 \
     1024 \
     2 \
+    1 \
     0 \
     0 \
     0 \
@@ -740,7 +741,7 @@ EOF
     "mock run.sh succeeds"
   assert_contains "mock run.sh path=${fake_repo}/scripts/run.sh" "${marker}" \
     "batch job invoked run.sh from explicit root"
-  assert_contains "--min-halo 2 --max-halo 1024 --halo-multiplier 2" \
+  assert_contains "--min-halo 2 --max-halo 1024 --halo-multiplier 2 --samples-per-halo 1" \
     "${marker}" "batch job forwards halo range"
   assert_not_contains "${spool_dir}/scripts/run.sh" "${output}" \
     "batch job did not derive run.sh from spool path"

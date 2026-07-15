@@ -25,19 +25,42 @@ namespace {
 
 class MockBackend final : public ghalo::Backend {
 public:
+  explicit MockBackend(bool enable_validation = false,
+                       bool enable_phase_timing = false)
+      : validation_enabled_(enable_validation),
+        phase_timing_supported_(enable_phase_timing) {
+    metadata_.validation_enabled = enable_validation;
+    metadata_.validation_passed = !enable_validation;
+  }
+
   std::string name() const override { return "MockBackend"; }
   std::string algorithm() const override { return "mock"; }
   ghalo::TopologyInfo topology() const override { return topology_; }
+  ghalo::BackendMetadata metadata() const override { return metadata_; }
 
   int rank() const override { return 0; }
   int size() const override { return 1; }
   bool is_root() const override { return true; }
 
-  void setup(std::size_t halo_words) override { halo_words_ = halo_words; }
+  void setup(std::size_t halo_words) override {
+    halo_words_ = halo_words;
+    ++setups_;
+  }
+
+  void validate_current_halo() override {
+    if (validation_enabled_) {
+      ++validations_;
+      metadata_.validation_passed = true;
+    }
+  }
 
   void exchange() override {
     assert(halo_words_ != 0);
     now_ += 0.01;
+    if (phase_timing_collecting_) {
+      phase_timing_.north_south_mpi_seconds += 0.001;
+      phase_timing_.east_west_mpi_seconds += 0.002;
+    }
     ++exchanges_;
   }
 
@@ -47,13 +70,59 @@ public:
 
   double max_time(double local_seconds) override { return local_seconds; }
 
+  bool supports_phase_timing() const override { return phase_timing_supported_; }
+
+  void set_phase_timing_enabled(bool enabled) override {
+    if (enabled && !phase_timing_supported_) {
+      throw std::runtime_error("phase timing is not supported by backend " +
+                               name());
+    }
+    phase_timing_enabled_ = enabled;
+    metadata_.phase_timing_enabled = enabled;
+    if (enabled) {
+      metadata_.phase_timing_source = "mock-clock";
+      metadata_.phase_timing_aggregation =
+          "maximum local average across ranks";
+    }
+  }
+
+  bool phase_timing_enabled() const override { return phase_timing_enabled_; }
+
+  void reset_phase_timing() override {
+    phase_timing_ = {};
+    phase_timing_collecting_ = phase_timing_enabled_;
+  }
+
+  ghalo::PhaseTimingResult phase_timing_result(int iterations,
+                                               double total_seconds) override {
+    phase_timing_collecting_ = false;
+    ghalo::PhaseTimingResult result;
+    result.north_south_mpi_seconds =
+        phase_timing_.north_south_mpi_seconds / iterations;
+    result.east_west_mpi_seconds =
+        phase_timing_.east_west_mpi_seconds / iterations;
+    result.phase_sum_seconds = ghalo::phase_timing_sum(result);
+    result.total_exchange_seconds = total_seconds;
+    return result;
+  }
+
   int exchanges() const { return exchanges_; }
+  int setups() const { return setups_; }
+  int validations() const { return validations_; }
 
 private:
   ghalo::TopologyInfo topology_{1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0};
+  ghalo::BackendMetadata metadata_{};
+  ghalo::PhaseTimingResult phase_timing_{};
   std::size_t halo_words_ = 0;
   double now_ = 0.0;
   int exchanges_ = 0;
+  int setups_ = 0;
+  int validations_ = 0;
+  bool validation_enabled_ = false;
+  bool phase_timing_supported_ = false;
+  bool phase_timing_enabled_ = false;
+  bool phase_timing_collecting_ = false;
 };
 
 ghalo::CliOptions parse_cli(std::vector<std::string> args) {
@@ -184,11 +253,13 @@ void test_halo_length_generation() {
   assert(benchmark_defaults.min_halo == ghalo::default_min_halo);
   assert(benchmark_defaults.max_halo == ghalo::default_max_halo);
   assert(benchmark_defaults.halo_multiplier == ghalo::default_halo_multiplier);
+  assert(benchmark_defaults.samples_per_halo == 1);
 
   const auto cli_defaults = parse_cli({"ghalo"});
   assert(cli_defaults.min_halo == ghalo::default_min_halo);
   assert(cli_defaults.max_halo == ghalo::default_max_halo);
   assert(cli_defaults.halo_multiplier == ghalo::default_halo_multiplier);
+  assert(cli_defaults.samples_per_halo == 1);
 
   const auto defaults = ghalo::generate_halo_lengths(
       ghalo::default_min_halo, ghalo::default_max_halo,
@@ -253,6 +324,45 @@ void test_benchmark_uses_configured_halo_lengths() {
   assert(results[0].halo_words == 2);
   assert(results[1].halo_words == 4);
   assert(results[2].halo_words == 8);
+}
+
+void test_benchmark_samples_per_halo() {
+  MockBackend backend(true, true);
+  backend.set_phase_timing_enabled(true);
+  ghalo::BenchmarkConfig config;
+  config.target_seconds = 0.01;
+  config.calibration_iterations = 2;
+  config.min_halo = 2;
+  config.max_halo = 4;
+  config.halo_multiplier = 2;
+  config.samples_per_halo = 3;
+
+  const auto results = ghalo::run_benchmark(backend, config);
+  assert(results.size() == 6);
+  assert(backend.setups() == 2);
+  assert(backend.validations() == 6);
+
+  const std::vector<std::size_t> expected_halos{2, 2, 2, 4, 4, 4};
+  const std::vector<std::size_t> expected_samples{1, 2, 3, 1, 2, 3};
+  for (std::size_t i = 0; i < results.size(); ++i) {
+    assert(results[i].halo_words == expected_halos[i]);
+    assert(results[i].sample_index == expected_samples[i]);
+    assert(results[i].sample_count == 3);
+    assert(results[i].iterations >= config.calibration_iterations);
+    assert(results[i].metadata.validation_enabled);
+    assert(results[i].metadata.validation_passed);
+    assert(results[i].metadata.phase_timing_enabled);
+    assert(results[i].phase_timing.has_value());
+  }
+
+  bool threw = false;
+  try {
+    config.samples_per_halo = 0;
+    (void)ghalo::run_benchmark(backend, config);
+  } catch (const std::invalid_argument&) {
+    threw = true;
+  }
+  assert(threw);
 }
 
 void test_north_south_stage_b_conceptual_plans() {
@@ -353,6 +463,8 @@ ghalo::BenchmarkResult sample_result() {
   result.two_n_message_bytes = 16;
   result.total_exchange_bytes_per_rank = 48;
   result.iterations = 5;
+  result.sample_index = 1;
+  result.sample_count = 1;
   result.max_total_seconds = 0.05;
   result.max_average_seconds = 0.01;
   result.topology = {1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0};
@@ -426,6 +538,10 @@ void test_cli_phase_timing_parse() {
   assert(halo_options.max_halo == 262144);
   assert(halo_options.halo_multiplier == 4);
 
+  const auto sample_options =
+      parse_cli({"ghalo", "--samples-per-halo", "50"});
+  assert(sample_options.samples_per_halo == 50);
+
   for (const std::string backend : {"mpi", "mpi-hip", "rccl"}) {
     const auto range_options =
         parse_cli({"ghalo", "--backend", backend, "--min-halo", "8",
@@ -477,6 +593,16 @@ void test_cli_phase_timing_parse() {
   }
   assert(bad_multiplier_threw);
 
+  for (const auto& bad_value : {"0", "abc"}) {
+    bool bad_sample_threw = false;
+    try {
+      (void)parse_cli({"ghalo", "--samples-per-halo", bad_value});
+    } catch (const std::invalid_argument&) {
+      bad_sample_threw = true;
+    }
+    assert(bad_sample_threw);
+  }
+
   const char* bad_argv_storage[] = {"ghalo", "--phase-timing", "--csv"};
   auto* bad_argv = const_cast<char**>(bad_argv_storage);
   bool threw = false;
@@ -513,11 +639,48 @@ void test_output_without_phase_timing_is_unchanged() {
   ghalo::write_csv(csv_path.string(), results);
   const std::string csv = read_file(csv_path);
   assert(csv.find("phase_input_device_copy_seconds") == std::string::npos);
+  assert(csv.find("sample_index,sample_count") != std::string::npos);
+  assert(csv.find(",1,1,0,0,0,0,0,0,0,0,host") != std::string::npos);
 
   const auto json_path = temp.file("ghalo_core_smoke_no_phase.json");
   ghalo::write_json(json_path.string(), results);
   const std::string json = read_file(json_path);
   assert(json.find("\"phase_timing\"") == std::string::npos);
+  assert(json.find("\"sample_index\": 1") != std::string::npos);
+  assert(json.find("\"sample_count\": 1") != std::string::npos);
+}
+
+void test_output_with_multiple_samples() {
+  auto first = sample_result();
+  auto second = sample_result();
+  first.sample_index = 1;
+  first.sample_count = 2;
+  second.sample_index = 2;
+  second.sample_count = 2;
+  second.max_total_seconds = 0.06;
+  second.max_average_seconds = 0.012;
+  const std::vector<ghalo::BenchmarkResult> results{first, second};
+  ScopedTempDirectory temp;
+
+  std::ostringstream console;
+  ghalo::write_console(console, results);
+  assert(console.str().find("Samples per halo: 2") != std::string::npos);
+  assert(console.str().find("sample") != std::string::npos);
+
+  const auto csv_path = temp.file("ghalo_core_smoke_samples.csv");
+  ghalo::write_csv(csv_path.string(), results);
+  const std::string csv = read_file(csv_path);
+  assert(csv.find("sample_index,sample_count") != std::string::npos);
+  assert(csv.find(",1,2,0,0,0,0,0,0,0,0,host") != std::string::npos);
+  assert(csv.find(",2,2,0,0,0,0,0,0,0,0,host") != std::string::npos);
+
+  const auto json_path = temp.file("ghalo_core_smoke_samples.json");
+  ghalo::write_json(json_path.string(), results);
+  const std::string json = read_file(json_path);
+  assert(json.find("\"sample_index\": 1") != std::string::npos);
+  assert(json.find("\"sample_index\": 2") != std::string::npos);
+  assert(json.find("\"sample_count\": 2") != std::string::npos);
+  assert_python_json_loads(json_path);
 }
 
 void test_json_string_escaping_is_strict() {
@@ -718,11 +881,13 @@ int main() {
   test_bytes_per_rank_consistency();
   test_halo_length_generation();
   test_benchmark_uses_configured_halo_lengths();
+  test_benchmark_samples_per_halo();
   test_phase_sum_calculation();
   test_unsupported_phase_timing();
   test_cli_phase_timing_parse();
   test_development_validation_refusal();
   test_output_without_phase_timing_is_unchanged();
+  test_output_with_multiple_samples();
   test_json_string_escaping_is_strict();
   test_output_with_phase_timing();
   test_output_with_rccl_phase_timing();

@@ -19,6 +19,7 @@ Options:
   --min-halo N              Minimum halo length. Default: 2.
   --max-halo N              Maximum halo length. Default: 1024.
   --halo-multiplier N       Halo length multiplier. Default: 2.
+  --samples-per-halo N      Independent timed samples per halo. Default: 1.
   --logs DIR                Harness log directory.
   -h, --help                Show this help.
 
@@ -39,6 +40,7 @@ target_seconds="0.1"
 min_halo="2"
 max_halo="1024"
 halo_multiplier="2"
+samples_per_halo="1"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 log_dir=""
 
@@ -74,6 +76,11 @@ while [[ $# -gt 0 ]]; do
       halo_multiplier="$2"
       shift 2
       ;;
+    --samples-per-halo)
+      [[ $# -ge 2 ]] || ghalo_die "--samples-per-halo requires a value"
+      samples_per_halo="$2"
+      shift 2
+      ;;
     --logs)
       [[ $# -ge 2 ]] || ghalo_die "--logs requires a value"
       log_dir="$2"
@@ -89,7 +96,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-for value_name in min_halo max_halo halo_multiplier; do
+for value_name in min_halo max_halo halo_multiplier samples_per_halo; do
   value="${!value_name}"
   if [[ ! "${value}" =~ ^[0-9]+$ || "${value}" -lt 1 ]]; then
     ghalo_die "--${value_name//_/-} must be a positive integer"
@@ -289,6 +296,7 @@ run_validation_case() {
     --min-halo "${min_halo}"
     --max-halo "${max_halo}"
     --halo-multiplier "${halo_multiplier}"
+    --samples-per-halo "${samples_per_halo}"
     --category validation
     --label "${result_label}"
   )

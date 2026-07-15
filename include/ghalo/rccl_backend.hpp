@@ -41,6 +41,7 @@ public:
   bool is_root() const override;
 
   void setup(std::size_t halo_words) override;
+  void validate_current_halo() override;
   void exchange() override;
   void barrier() override;
   double now() const override;

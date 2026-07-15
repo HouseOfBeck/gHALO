@@ -13,6 +13,7 @@ struct BenchmarkConfig {
   std::size_t min_halo = default_min_halo;
   std::size_t max_halo = default_max_halo;
   std::size_t halo_multiplier = default_halo_multiplier;
+  std::size_t samples_per_halo = 1;
   std::vector<std::size_t> halo_lengths{};
   double target_seconds = 3.0;
   int calibration_iterations = 5;
@@ -27,6 +28,8 @@ struct BenchmarkResult {
   std::size_t two_n_message_bytes{};
   std::size_t total_exchange_bytes_per_rank{};
   int iterations{};
+  std::size_t sample_index{1};
+  std::size_t sample_count{1};
   double max_average_seconds{};
   double max_total_seconds{};
   TopologyInfo topology;

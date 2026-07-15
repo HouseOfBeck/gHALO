@@ -17,6 +17,7 @@ struct CliOptions {
   std::size_t min_halo = default_min_halo;
   std::size_t max_halo = default_max_halo;
   std::size_t halo_multiplier = default_halo_multiplier;
+  std::size_t samples_per_halo = 1;
   double target_seconds = 3.0;
   bool show_help = false;
   bool validate = true;

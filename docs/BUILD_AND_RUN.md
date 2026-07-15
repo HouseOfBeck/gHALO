@@ -177,6 +177,7 @@ Supported options:
 --min-halo <N>
 --max-halo <N>
 --halo-multiplier <N>
+--samples-per-halo <N>
 --validate
 --phase-timing
 --rccl-stage-b
@@ -264,6 +265,54 @@ GHALO_SYSTEM_NAME=frontier scripts/run.sh \
   --target-seconds 3 \
   --category scaling \
   --label 64node-extended
+```
+
+## Persistent-Process Repeatability
+
+Use `--samples-per-halo <N>` to collect multiple independent timed samples for
+each halo size within a single gHALO executable. For each halo, gHALO configures
+the backend once, performs the usual warmup and calibration once, fixes the
+iteration count once, and then records `N` timed samples without reinitializing
+MPI, HIP, RCCL, streams, communicators, or the backend. This mode is intended to
+distinguish process-lifetime state from invocation-to-invocation state.
+
+The default is `--samples-per-halo 1`, which preserves normal single-sample
+behavior. CSV and JSON output include `sample_index` and `sample_count`.
+
+Example Borg RCCL conservative run for halo 128 with 50 samples:
+
+```sh
+GHALO_SYSTEM_NAME=borg scripts/run.sh \
+  --backend rccl \
+  --rccl-sync-mode conservative \
+  --nodes 1 \
+  --ranks 8 \
+  --ranks-per-node 8 \
+  --min-halo 128 \
+  --max-halo 128 \
+  --samples-per-halo 50 \
+  --target-seconds 0.1 \
+  --validate \
+  --category repeatability \
+  --label conservative-halo128-50samples
+```
+
+Example Borg RCCL stream-ordered run for halo 64 with 50 samples:
+
+```sh
+GHALO_SYSTEM_NAME=borg scripts/run.sh \
+  --backend rccl \
+  --rccl-sync-mode stream-ordered \
+  --nodes 1 \
+  --ranks 8 \
+  --ranks-per-node 8 \
+  --min-halo 64 \
+  --max-halo 64 \
+  --samples-per-halo 50 \
+  --target-seconds 0.1 \
+  --validate \
+  --category repeatability \
+  --label stream-ordered-halo64-50samples
 ```
 
 For RCCL full correctness validation:
