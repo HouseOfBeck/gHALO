@@ -212,6 +212,7 @@ module unload craype-accel-amd-gfx90a 2>/dev/null || true
 export MPICH_GPU_SUPPORT_ENABLED=0
 
 run_version 6.4.2 22203
+binary="$ROOT/builds/borg/rccl-rocm-${version}/ghalo"
 echo "Runtime dependencies for ${binary}:"
 ldd "${binary}"
 
@@ -225,6 +226,7 @@ if readelf -d "${binary}" | grep -q 'libmpi_gtl_hsa'; then
     exit 1
 fi
 run_version 7.0.2 22606
+binary="$ROOT/builds/borg/rccl-rocm-${version}/ghalo"
 echo "Runtime dependencies for ${binary}:"
 ldd "${binary}"
 
@@ -238,6 +240,7 @@ if readelf -d "${binary}" | grep -q 'libmpi_gtl_hsa'; then
     exit 1
 fi
 run_version 7.2.0 22707
+binary="$ROOT/builds/borg/rccl-rocm-${version}/ghalo"
 echo "Runtime dependencies for ${binary}:"
 ldd "${binary}"
 
