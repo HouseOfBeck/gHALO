@@ -18,7 +18,7 @@ ghalo_borg_load_common() {
 }
 
 ghalo_borg_selected_rocm_version() {
-  printf '%s\n' "${GHALO_ROCM_VERSION:-6.4.2}"
+  printf '%s\n' "${GHALO_ROCM_VERSION:-7.2.0}"
 }
 
 ghalo_borg_remove_stale_rocm_paths() {
@@ -70,6 +70,11 @@ ghalo_borg_load_gpu() {
   module load "rocm/${version}" ||
     ghalo_die "failed to load required Borg ROCm module rocm/${version}"
   ghalo_borg_remove_stale_rocm_paths "${version}"
+  if [[ -n "${CRAY_MPICH_ROOTDIR:-}" ]]; then
+    export LD_LIBRARY_PATH="${CRAY_MPICH_ROOTDIR}/ofi/amd/7.0/lib:${LD_LIBRARY_PATH}"
+  fi
+
+  export LD_LIBRARY_PATH="${ROCM_PATH}/lib:${LD_LIBRARY_PATH}"
   export GHALO_LOADED_ROCM_MODULE="rocm/${version}"
   export GHALO_ROCM_VERSION="${version}"
   hip_compiler="$(command -v hipcc 2>/dev/null || true)"
