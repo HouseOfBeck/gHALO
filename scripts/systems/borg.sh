@@ -17,26 +17,71 @@ ghalo_borg_load_common() {
     ghalo_die "Borg builds require the Cray C++ wrapper 'CC'"
 }
 
+ghalo_borg_selected_rocm_version() {
+  printf '%s\n' "${GHALO_ROCM_VERSION:-6.4.2}"
+}
+
+ghalo_borg_remove_stale_rocm_paths() {
+  local selected="$1"
+  local name
+  local value
+  local entry
+  local cleaned
+  local old_version
+  for name in PATH LD_LIBRARY_PATH CMAKE_PREFIX_PATH; do
+    value="${!name-}"
+    [[ -n "${value}" ]] || continue
+    cleaned=""
+    while IFS= read -r entry; do
+      [[ -n "${entry}" ]] || continue
+      local keep=true
+      for old_version in 6.2.4 6.4.2 7.0.2 7.2.0; do
+        if [[ "${old_version}" != "${selected}" &&
+              ( "${entry}" == *"rocm-${old_version}"* ||
+                "${entry}" == *"rocm/${old_version}"* ) ]]; then
+          keep=false
+        fi
+      done
+      if [[ "${keep}" == true ]]; then
+        if [[ -n "${cleaned}" ]]; then
+          cleaned+=":${entry}"
+        else
+          cleaned="${entry}"
+        fi
+      fi
+    done < <(printf '%s\n' "${value//:/$'\n'}")
+    export "${name}=${cleaned}"
+  done
+  if [[ -n "${HIP_PATH:-}" ]] &&
+     ! ghalo_borg_path_matches_rocm_version "${HIP_PATH}" "${selected}"; then
+    unset HIP_PATH
+  fi
+}
+
 ghalo_borg_load_gpu() {
+  local version
   local hip_compiler
   local hip_library
+  version="$(ghalo_borg_selected_rocm_version)"
   ghalo_borg_require_modules
   module load craype-accel-amd-gfx90a ||
     ghalo_die "failed to load craype-accel-amd-gfx90a on Borg"
   ghalo_borg_unload_rocm
-  module load rocm/6.4.2 ||
-    ghalo_die "failed to load required Borg ROCm module rocm/6.4.2"
-  export GHALO_LOADED_ROCM_MODULE=rocm/6.4.2
-  export GHALO_ROCM_VERSION=6.4.2
+  module load "rocm/${version}" ||
+    ghalo_die "failed to load required Borg ROCm module rocm/${version}"
+  ghalo_borg_remove_stale_rocm_paths "${version}"
+  export GHALO_LOADED_ROCM_MODULE="rocm/${version}"
+  export GHALO_ROCM_VERSION="${version}"
   hip_compiler="$(command -v hipcc 2>/dev/null || true)"
   [[ -n "${hip_compiler}" ]] ||
-    ghalo_die "Borg MPI-HIP setup requires hipcc from rocm/6.4.2"
-  ghalo_borg_path_matches_rocm_version "${hip_compiler}" "6.4.2" ||
-    ghalo_die "Borg MPI-HIP mixed ROCm configuration: hipcc='${hip_compiler}' does not match rocm/6.4.2"
+    ghalo_die "Borg MPI-HIP setup requires hipcc from rocm/${version}"
+  ghalo_borg_path_matches_rocm_version "${hip_compiler}" "${version}" ||
+    ghalo_die "Borg MPI-HIP mixed ROCm configuration: hipcc='${hip_compiler}' does not match rocm/${version}"
   hip_library="$(ghalo_borg_resolve_hip_library "${ROCM_PATH}")" ||
     ghalo_die "Borg MPI-HIP setup could not find libamdhip64.so under ROCM_PATH='${ROCM_PATH}'"
-  ghalo_borg_path_matches_rocm_version "${hip_library}" "6.4.2" ||
-    ghalo_die "Borg MPI-HIP mixed ROCm configuration: libamdhip64='${hip_library}' does not match rocm/6.4.2"
+  ghalo_borg_path_matches_rocm_version "${hip_library}" "${version}" ||
+    ghalo_die "Borg MPI-HIP mixed ROCm configuration: libamdhip64='${hip_library}' does not match rocm/${version}"
+  export HIP_PATH="${ROCM_PATH}"
   export GHALO_RESOLVED_HIP_COMPILER="${hip_compiler}"
   export GHALO_RESOLVED_HIP_LIBRARY="${hip_library}"
   unset RCCL_ROOT
@@ -137,18 +182,21 @@ ghalo_borg_verify_rccl_rocm_consistency() {
 
   export GHALO_LOADED_ROCM_MODULE=rocm/${version}
   export GHALO_ROCM_VERSION="${version}"
+  export HIP_PATH="${ROCM_PATH}"
   export GHALO_RESOLVED_HIP_COMPILER="${hip_compiler}"
   export GHALO_RESOLVED_RCCL_LIBRARY="${rccl_library}"
 }
 
 ghalo_borg_load_rccl_gpu() {
-  local version="${GHALO_BORG_RCCL_ROCM_VERSION:-${GHALO_ROCM_VERSION:-6.4.2}}"
+  local version
+  version="$(ghalo_borg_selected_rocm_version)"
   ghalo_borg_require_modules
   module load craype-accel-amd-gfx90a ||
     ghalo_die "failed to load craype-accel-amd-gfx90a on Borg"
   ghalo_borg_unload_rocm
   module load "rocm/${version}" ||
     ghalo_die "failed to load required Borg ROCm module rocm/${version}"
+  ghalo_borg_remove_stale_rocm_paths "${version}"
   module load rccl-net-plugin/1.0 ||
     ghalo_die "failed to load required Borg RCCL network plugin rccl-net-plugin/1.0"
   ghalo_borg_verify_rccl_rocm_consistency "${version}"

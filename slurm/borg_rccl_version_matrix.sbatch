@@ -99,7 +99,7 @@ prepare_stack() {
   local libhip
   local libnet
 
-  export GHALO_BORG_RCCL_ROCM_VERSION="${version}"
+  export GHALO_ROCM_VERSION="${version}"
   export GHALO_REQUESTED_ROCM_VERSION="${version}"
   export GHALO_RCCL_VERSION_CODE_EXPECTED="${expected_code}"
   export GHALO_RCCL_NET_PLUGIN_MODULE=rccl-net-plugin/1.0
@@ -146,7 +146,9 @@ run_version() {
 
   mkdir -p "${log_dir}"
   printf '\n== ROCm %s / RCCL version code %s ==\n' "${version}" "${expected_code}"
+  export GHALO_ROCM_VERSION="${version}"
   prepare_stack "${version}" "${expected_code}"
+
 
   binary="$ROOT/builds/borg/rccl-rocm-${version}/ghalo"
 
@@ -173,21 +175,36 @@ run_version() {
    echo "Runtime dependencies for ${binary}:"
    ldd "${binary}"
 
-   if ldd "${binary}" | grep -q 'not found'; then
-     echo "UNUSABLE STACK: ROCm ${version} has unresolved runtime dependencies" >&2
-     ldd "${binary}" >&2
-     return 0
-   fi
+  GHALO_SYSTEM_NAME=borg \
+  GHALO_ROCM_VERSION="${version}" \
+  GHALO_BUILD_DIR_OVERRIDE="${build_dir}" \
+  scripts/build.sh \
+    --system borg \
+    --backend rccl \
+    --build-dir "${build_dir}" \
+    --build-type Release
 
-   verify_ldd_stack \
+  if [[ ! -x "${binary}" ]]; then
+    echo "UNUSABLE STACK: ROCm ${version} build did not produce ${binary}" >&2
+    return 0
+  fi
+
+  echo "Runtime dependencies for ${binary}:"
+  ldd "${binary}"
+
+  if ldd "${binary}" | grep -q 'not found'; then
+    echo "UNUSABLE STACK: ROCm ${version} has unresolved runtime dependencies" >&2
+    ldd "${binary}" >&2
+    return 0
+  fi
+
+  verify_ldd_stack \
     "${binary}" \
     "${version}" \
     "${log_dir}/ldd-rocm-${version}.txt"
 
-  verify_ldd_stack "${binary}" "${version}" "${log_dir}/ldd-rocm-${version}.txt"
-
   GHALO_SYSTEM_NAME=borg \
-  GHALO_BORG_RCCL_ROCM_VERSION="${version}" \
+  GHALO_ROCM_VERSION="${version}" \
   GHALO_BUILD_DIR_OVERRIDE="${build_dir}" \
   GHALO_REQUESTED_ROCM_VERSION="${version}" \
   GHALO_RCCL_VERSION_CODE_EXPECTED="${expected_code}" \
