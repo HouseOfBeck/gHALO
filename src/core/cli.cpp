@@ -53,6 +53,7 @@ void print_usage(std::ostream& out) {
       << "             [--samples-per-halo N]\n"
       << "             [--record-iteration-times]\n"
       << "             [--record-iteration-phase-times]\n"
+      << "             [--record-stalled-rank-times]\n"
       << "             [--iteration-stall-threshold-us VALUE]\n";
 }
 
@@ -110,6 +111,8 @@ CliOptions parse_cli_options(int argc, char** argv) {
       options.record_iteration_times = true;
     } else if (arg == "--record-iteration-phase-times") {
       options.record_iteration_phase_times = true;
+    } else if (arg == "--record-stalled-rank-times") {
+      options.record_stalled_rank_times = true;
     } else if (arg == "--iteration-stall-threshold-us" && i + 1 < argc) {
       options.iteration_stall_threshold_us =
           parse_nonnegative_double(argv[++i], "--iteration-stall-threshold-us");
@@ -125,6 +128,13 @@ CliOptions parse_cli_options(int argc, char** argv) {
       !options.record_iteration_times) {
     throw std::invalid_argument(
         "--record-iteration-phase-times requires --record-iteration-times");
+  }
+  if (options.record_stalled_rank_times &&
+      (!options.record_iteration_times ||
+       !options.record_iteration_phase_times)) {
+    throw std::invalid_argument(
+        "--record-stalled-rank-times requires --record-iteration-times and "
+        "--record-iteration-phase-times");
   }
   return options;
 }

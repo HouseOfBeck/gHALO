@@ -19,6 +19,7 @@ struct BenchmarkConfig {
   double target_seconds = 3.0;
   bool record_iteration_times = false;
   bool record_iteration_phase_times = false;
+  bool record_stalled_rank_times = false;
   double iteration_stall_threshold_us = 0.0;
   int calibration_iterations = 5;
 };
@@ -79,6 +80,12 @@ struct BenchmarkResult {
   std::string iteration_phase_backend_schema;
   double iteration_phase_stall_threshold_us = 0.0;
   std::vector<IterationPhaseTimingRecord> iteration_phase_times;
+  bool stalled_rank_timing_enabled = false;
+  std::size_t stalled_rank_iterations_recorded = 0;
+  std::size_t stalled_rank_rows_emitted = 0;
+  std::string stalled_rank_schema;
+  double stalled_rank_stall_threshold_us = 0.0;
+  std::vector<StalledRankTimingRecord> stalled_rank_times;
 };
 
 std::vector<BenchmarkResult> run_benchmark(Backend& backend,

@@ -26,6 +26,8 @@ Options:
   --record-iteration-times   Write per-iteration max-rank timing diagnostics.
   --record-iteration-phase-times
                              Write per-phase timing for threshold-matched iterations.
+  --record-stalled-rank-times
+                             Write per-rank timing rows for stalled iterations.
   --iteration-stall-threshold-us VALUE
                              Emit iteration timing records at or above VALUE us.
                              Default/zero emits every measured iteration.
@@ -53,6 +55,7 @@ halo_multiplier="2"
 samples_per_halo="1"
 record_iteration_times=false
 record_iteration_phase_times=false
+record_stalled_rank_times=false
 iteration_stall_threshold_us=""
 validate=false
 phase_timing=false
@@ -120,6 +123,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --record-iteration-phase-times)
       record_iteration_phase_times=true
+      shift
+      ;;
+    --record-stalled-rank-times)
+      record_stalled_rank_times=true
       shift
       ;;
     --iteration-stall-threshold-us)
@@ -204,6 +211,11 @@ if [[ "${record_iteration_phase_times}" == true &&
       "${record_iteration_times}" != true ]]; then
   ghalo_die "--record-iteration-phase-times requires --record-iteration-times"
 fi
+if [[ "${record_stalled_rank_times}" == true &&
+      ( "${record_iteration_times}" != true ||
+        "${record_iteration_phase_times}" != true ) ]]; then
+  ghalo_die "--record-stalled-rank-times requires --record-iteration-times and --record-iteration-phase-times"
+fi
 
 system="$(ghalo_resolve_system "${requested_system}")"
 ghalo_validate_system_name "${system}"
@@ -265,6 +277,9 @@ fi
 if [[ "${record_iteration_phase_times}" == true ]]; then
   ghalo_args+=(--record-iteration-phase-times)
 fi
+if [[ "${record_stalled_rank_times}" == true ]]; then
+  ghalo_args+=(--record-stalled-rank-times)
+fi
 if [[ -n "${iteration_stall_threshold_us}" ]]; then
   ghalo_args+=(--iteration-stall-threshold-us "${iteration_stall_threshold_us}")
 fi
@@ -302,6 +317,7 @@ ghalo_write_system_resolution "${result_dir}/system-resolution.txt" \
   printf 'samples_per_halo=%s\n' "${samples_per_halo}"
   printf 'iteration_timing_enabled=%s\n' "${record_iteration_times}"
   printf 'iteration_phase_timing_enabled=%s\n' "${record_iteration_phase_times}"
+  printf 'stalled_rank_timing_enabled=%s\n' "${record_stalled_rank_times}"
   printf 'iteration_stall_threshold_us=%s\n' "${iteration_stall_threshold_us:-0}"
   printf 'requested_nodes=%s\n' "${nodes}"
   printf 'requested_ranks=%s\n' "${ranks}"
@@ -395,11 +411,40 @@ echo "gHALO exit status: ${status}"
       mpi-hip:*) iteration_phase_backend_schema="mpi-hip" ;;
     esac
   fi
+  if [[ "${record_stalled_rank_times}" == true && -s "${result_dir}/stalled-rank-times.csv" ]]; then
+    stalled_rank_rows_emitted="$(awk 'END { print (NR > 0 ? NR - 1 : 0) }' \
+      "${result_dir}/stalled-rank-times.csv")"
+    stalled_rank_iterations_recorded="$(awk -F, '
+      NR > 1 {
+        key = $5 ":" $6 ":" $8
+        seen[key] = 1
+      }
+      END {
+        for (key in seen) {
+          ++count
+        }
+        print count + 0
+      }
+    ' "${result_dir}/stalled-rank-times.csv")"
+    stalled_rank_schema="$(awk -F, 'NR == 2 { gsub(/^"|"$/, "", $21); print $21 }' \
+      "${result_dir}/stalled-rank-times.csv")"
+  else
+    stalled_rank_rows_emitted="0"
+    stalled_rank_iterations_recorded="0"
+    stalled_rank_schema=""
+  fi
+  if [[ "${record_stalled_rank_times}" == true && -z "${stalled_rank_schema}" ]]; then
+    stalled_rank_schema="${iteration_phase_backend_schema}"
+  fi
   printf 'iteration_total_observed=%s\n' "${iteration_total_observed}"
   printf 'iteration_records_emitted=%s\n' "${iteration_records_emitted}"
   printf 'iteration_stall_count=%s\n' "${iteration_stall_count}"
   printf 'iteration_phase_records_emitted=%s\n' "${iteration_phase_records_emitted}"
   printf 'iteration_phase_backend_schema=%s\n' "${iteration_phase_backend_schema}"
   printf 'iteration_phase_stall_threshold_us=%s\n' "${iteration_stall_threshold_us:-0}"
+  printf 'stalled_rank_iterations_recorded=%s\n' "${stalled_rank_iterations_recorded}"
+  printf 'stalled_rank_rows_emitted=%s\n' "${stalled_rank_rows_emitted}"
+  printf 'stalled_rank_schema=%s\n' "${stalled_rank_schema}"
+  printf 'stalled_rank_stall_threshold_us=%s\n' "${iteration_stall_threshold_us:-0}"
 } >>"${result_dir}/result-metadata.txt"
 exit "${status}"

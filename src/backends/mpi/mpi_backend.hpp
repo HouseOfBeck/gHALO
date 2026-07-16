@@ -46,6 +46,11 @@ public:
   double max_time(double local_seconds) override;
   std::vector<IterationTimingReduction> max_time_ranks(
       const std::vector<double>& local_seconds) override;
+  std::vector<StalledRankTimingRecord> gather_stalled_rank_timings(
+      std::size_t halo_words, std::size_t sample_index,
+      std::size_t sample_count, int iterations_in_sample,
+      double stall_threshold_us, const std::string& backend_schema,
+      const std::vector<StalledIterationLocalRecord>& local_records) override;
 
 private:
   void initialize_topology();

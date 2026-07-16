@@ -67,6 +67,32 @@ class PhaseRecord:
 
 
 @dataclass
+class RankRecord:
+    halo_words: int
+    sample_index: int
+    iteration_index: int
+    world_rank: int
+    local_rank: int
+    hostname: str
+    selected_hip_device: int
+    cart_row: int
+    cart_col: int
+    local_total_iteration_seconds: float
+    global_max_iteration_seconds: float
+    global_max_iteration_rank: int
+    backend_schema: str
+    phases: Dict[str, float]
+
+    @property
+    def local_total_us(self) -> float:
+        return self.local_total_iteration_seconds * 1.0e6
+
+    @property
+    def global_max_us(self) -> float:
+        return self.global_max_iteration_seconds * 1.0e6
+
+
+@dataclass
 class PhaseSummary:
     phase_name: str
     dominant_iterations: int
@@ -109,6 +135,15 @@ class CaseSummary:
     phase_summaries: List[PhaseSummary] = field(default_factory=list)
     phase_iteration_breakdown: List[Dict[str, Any]] = field(default_factory=list)
     stall_cause_classification: str = "mixed/unattributed"
+    rank_event_breakdown: List[Dict[str, Any]] = field(default_factory=list)
+    rank_event_classification_frequency: Dict[str, int] = field(default_factory=dict)
+    slow_rank_frequency: Dict[int, int] = field(default_factory=dict)
+    slow_node_frequency: Dict[str, int] = field(default_factory=dict)
+    slow_gpu_frequency: Dict[str, int] = field(default_factory=dict)
+    slow_row_frequency: Dict[int, int] = field(default_factory=dict)
+    slow_column_frequency: Dict[int, int] = field(default_factory=dict)
+    dominant_phase_rank_matches: int = 0
+    dominant_phase_rank_mismatches: int = 0
     warnings: List[str] = field(default_factory=list)
 
 
@@ -283,6 +318,95 @@ def load_phase_records(path: Path) -> Tuple[List[PhaseRecord], List[str]]:
     return records, warnings
 
 
+def parse_float(row: Dict[str, str], column: str) -> float:
+    value = row.get(column, "")
+    return float(value) if value not in ("", None) else 0.0
+
+
+def parse_int(row: Dict[str, str], column: str, default: int = 0) -> int:
+    value = row.get(column, "")
+    return int(value) if value not in ("", None) else default
+
+
+def load_rank_records(path: Path) -> Tuple[List[RankRecord], List[str]]:
+    warnings: List[str] = []
+    if not path.exists():
+        warnings.append(f"missing stalled rank timing file: {path}")
+        return [], warnings
+    if path.stat().st_size == 0:
+        warnings.append(f"empty stalled rank timing file: {path}")
+        return [], warnings
+
+    phase_columns = [
+        "north_south_communication_seconds",
+        "north_south_sync_seconds",
+        "transpose_copy_seconds",
+        "transpose_sync_seconds",
+        "east_west_communication_seconds",
+        "east_west_sync_seconds",
+        "north_south_enqueue_seconds",
+        "transpose_enqueue_seconds",
+        "east_west_enqueue_seconds",
+        "final_stream_sync_seconds",
+        "input_device_copy_seconds",
+        "north_south_mpi_seconds",
+        "transpose_device_copy_seconds",
+        "transpose_copy_sync_seconds",
+        "east_west_mpi_seconds",
+    ]
+    required = {
+        "halo_words",
+        "sample_index",
+        "iteration_index",
+        "world_rank",
+        "local_rank",
+        "hostname",
+        "selected_hip_device",
+        "cart_row",
+        "cart_col",
+        "local_total_iteration_seconds",
+        "global_max_iteration_seconds",
+        "global_max_iteration_rank",
+        "backend_schema",
+    }
+
+    records: List[RankRecord] = []
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        if not reader.fieldnames or not required.issubset(reader.fieldnames):
+            raise StallAnalysisError(
+                f"stalled-rank-times.csv missing required columns: {path}"
+            )
+        for row in reader:
+            records.append(
+                RankRecord(
+                    halo_words=int(row["halo_words"]),
+                    sample_index=int(row["sample_index"]),
+                    iteration_index=int(row["iteration_index"]),
+                    world_rank=int(row["world_rank"]),
+                    local_rank=parse_int(row, "local_rank", -1),
+                    hostname=row.get("hostname", ""),
+                    selected_hip_device=parse_int(row, "selected_hip_device", -1),
+                    cart_row=parse_int(row, "cart_row", -1),
+                    cart_col=parse_int(row, "cart_col", -1),
+                    local_total_iteration_seconds=parse_float(
+                        row, "local_total_iteration_seconds"
+                    ),
+                    global_max_iteration_seconds=parse_float(
+                        row, "global_max_iteration_seconds"
+                    ),
+                    global_max_iteration_rank=parse_int(
+                        row, "global_max_iteration_rank", -1
+                    ),
+                    backend_schema=row.get("backend_schema", ""),
+                    phases={
+                        column: parse_float(row, column) for column in phase_columns
+                    },
+                )
+            )
+    return records, warnings
+
+
 def longest_stall_free_sequence(sequence: str) -> int:
     longest = 0
     current = 0
@@ -383,6 +507,195 @@ def analyze_phase_records(
     return len(by_iteration), summaries, breakdown, classification, warnings
 
 
+def local_phase_value(record: RankRecord, phase_name: str) -> float:
+    aliases = {
+        "north_south_communication": "north_south_communication_seconds",
+        "north_south_sync": "north_south_sync_seconds",
+        "transpose_copy": "transpose_copy_seconds",
+        "transpose_sync": "transpose_sync_seconds",
+        "east_west_communication": "east_west_communication_seconds",
+        "east_west_sync": "east_west_sync_seconds",
+        "north_south_enqueue": "north_south_enqueue_seconds",
+        "transpose_enqueue": "transpose_enqueue_seconds",
+        "east_west_enqueue": "east_west_enqueue_seconds",
+        "final_stream_sync": "final_stream_sync_seconds",
+        "input_device_copy": "input_device_copy_seconds",
+        "north_south_mpi": "north_south_mpi_seconds",
+        "transpose_device_copy": "transpose_device_copy_seconds",
+        "transpose_copy_sync": "transpose_copy_sync_seconds",
+        "east_west_mpi": "east_west_mpi_seconds",
+    }
+    return record.phases.get(aliases.get(phase_name, phase_name), 0.0)
+
+
+def analyze_rank_records(
+    rank_records: Sequence[RankRecord],
+    sample_by_key: Dict[SampleKey, SampleInfo],
+    phase_breakdown: Sequence[Dict[str, Any]],
+) -> Tuple[
+    List[Dict[str, Any]],
+    Dict[str, int],
+    Dict[int, int],
+    Dict[str, int],
+    Dict[str, int],
+    Dict[int, int],
+    Dict[int, int],
+    int,
+    int,
+    List[str],
+]:
+    warnings: List[str] = []
+    phase_by_iteration = {
+        (row["halo_words"], row["sample_index"], row["iteration_index"]): row
+        for row in phase_breakdown
+    }
+    by_iteration: Dict[Tuple[int, int, int], List[RankRecord]] = defaultdict(list)
+    seen_rank_keys = set()
+    for record in rank_records:
+        sample_key = SampleKey(record.halo_words, record.sample_index)
+        if sample_key not in sample_by_key:
+            warnings.append(
+                "stalled rank record references missing sample metadata: "
+                f"halo={record.halo_words} sample={record.sample_index}"
+            )
+        rank_key = (
+            record.halo_words,
+            record.sample_index,
+            record.iteration_index,
+            record.world_rank,
+        )
+        if rank_key in seen_rank_keys:
+            raise StallAnalysisError(
+                "duplicate stalled rank row for halo/sample/iteration/rank: "
+                f"{rank_key}"
+            )
+        seen_rank_keys.add(rank_key)
+        by_iteration[
+            (record.halo_words, record.sample_index, record.iteration_index)
+        ].append(record)
+
+    classification_counter: Counter[str] = Counter()
+    slow_rank_counter: Counter[int] = Counter()
+    slow_node_counter: Counter[str] = Counter()
+    slow_gpu_counter: Counter[str] = Counter()
+    slow_row_counter: Counter[int] = Counter()
+    slow_col_counter: Counter[int] = Counter()
+    dominant_matches = 0
+    dominant_mismatches = 0
+    breakdown: List[Dict[str, Any]] = []
+
+    for key in sorted(by_iteration):
+        rows = sorted(by_iteration[key], key=lambda row: row.world_rank)
+        world_size = len(rows)
+        if world_size == 0:
+            continue
+        global_max_us = max(row.global_max_us for row in rows)
+        local_totals = [row.local_total_us for row in rows]
+        cutoff80 = global_max_us * 0.8
+        cutoff50 = global_max_us * 0.5
+        cutoff95 = global_max_us * 0.95
+        affected80 = [row for row in rows if row.local_total_us >= cutoff80]
+        affected50 = [row for row in rows if row.local_total_us >= cutoff50]
+        affected95 = [row for row in rows if row.local_total_us >= cutoff95]
+
+        hosts80 = {row.hostname for row in affected80}
+        rows80 = {row.cart_row for row in affected80}
+        cols80 = {row.cart_col for row in affected80}
+        if len(affected80) >= math.ceil(0.8 * world_size):
+            classification = "collective-wide"
+        elif len(affected80) <= 2:
+            classification = "rank-localized"
+        elif len(hosts80) == 1:
+            classification = "node-localized"
+        elif len(rows80) == 1:
+            classification = "row-localized"
+        elif len(cols80) == 1:
+            classification = "column-localized"
+        else:
+            classification = "mixed"
+        classification_counter[classification] += 1
+
+        for row in affected80:
+            slow_rank_counter[row.world_rank] += 1
+            slow_node_counter[row.hostname or "unknown"] += 1
+            slow_gpu_counter[f"{row.hostname or 'unknown'}:{row.selected_hip_device}"] += 1
+            slow_row_counter[row.cart_row] += 1
+            slow_col_counter[row.cart_col] += 1
+
+        phase_info = phase_by_iteration.get(key, {})
+        dominant_phase = phase_info.get("dominant_phase", "")
+        dominant_phase_rank = phase_info.get("dominant_phase_max_rank", None)
+        total_rank = rows[0].global_max_iteration_rank
+        if dominant_phase_rank is not None:
+            if int(dominant_phase_rank) == int(total_rank):
+                dominant_matches += 1
+            else:
+                dominant_mismatches += 1
+
+        local_phase_values = []
+        if dominant_phase:
+            local_phase_values = [
+                {
+                    "world_rank": row.world_rank,
+                    "hostname": row.hostname,
+                    "selected_hip_device": row.selected_hip_device,
+                    "cart_row": row.cart_row,
+                    "cart_col": row.cart_col,
+                    "phase_us": local_phase_value(row, dominant_phase) * 1.0e6,
+                    "local_total_us": row.local_total_us,
+                }
+                for row in rows
+            ]
+
+        breakdown.append(
+            {
+                "halo_words": key[0],
+                "sample_index": key[1],
+                "iteration_index": key[2],
+                "classification": classification,
+                "world_size": world_size,
+                "global_max_us": global_max_us,
+                "global_max_rank": total_rank,
+                "min_local_us": min(local_totals),
+                "median_local_us": statistics.median(local_totals),
+                "mean_local_us": statistics.fmean(local_totals),
+                "max_local_us": max(local_totals),
+                "coefficient_of_variation": (
+                    statistics.pstdev(local_totals) / statistics.fmean(local_totals)
+                    if statistics.fmean(local_totals) > 0.0
+                    else 0.0
+                ),
+                "ranks_ge_50pct": len(affected50),
+                "ranks_ge_80pct": len(affected80),
+                "ranks_ge_95pct": len(affected95),
+                "pct_ranks_ge_80pct": percent(len(affected80), world_size),
+                "nodes_ge_80pct": sorted(hosts80),
+                "rows_ge_80pct": sorted(rows80),
+                "columns_ge_80pct": sorted(cols80),
+                "dominant_phase": dominant_phase,
+                "dominant_phase_max_rank": dominant_phase_rank,
+                "dominant_phase_rank_matches_total": (
+                    dominant_phase_rank is not None
+                    and int(dominant_phase_rank) == int(total_rank)
+                ),
+                "local_dominant_phase_distribution": local_phase_values,
+            }
+        )
+
+    return (
+        breakdown,
+        dict(sorted(classification_counter.items())),
+        dict(sorted(slow_rank_counter.items())),
+        dict(sorted(slow_node_counter.items())),
+        dict(sorted(slow_gpu_counter.items())),
+        dict(sorted(slow_row_counter.items())),
+        dict(sorted(slow_col_counter.items())),
+        dominant_matches,
+        dominant_mismatches,
+        warnings,
+    )
+
+
 def analyze_case(result_dir: Path, threshold_override_us: Optional[float] = None) -> CaseSummary:
     samples, payload = load_samples(result_dir)
     result_metadata = parse_key_value_file(result_dir / "result-metadata.txt")
@@ -392,6 +705,8 @@ def analyze_case(result_dir: Path, threshold_override_us: Optional[float] = None
         result_dir / "iteration-phase-times.csv"
     )
     warnings.extend(phase_warnings)
+    rank_records, rank_warnings = load_rank_records(result_dir / "stalled-rank-times.csv")
+    warnings.extend(rank_warnings)
 
     sample_by_key = {sample.key: sample for sample in samples}
     total_iterations = sum(sample.iterations for sample in samples)
@@ -443,6 +758,19 @@ def analyze_case(result_dir: Path, threshold_override_us: Optional[float] = None
         phase_analysis_warnings,
     ) = analyze_phase_records(phase_records, sample_by_key, affected_iteration_keys)
     warnings.extend(phase_analysis_warnings)
+    (
+        rank_event_breakdown,
+        rank_event_classification_frequency,
+        slow_rank_frequency,
+        slow_node_frequency,
+        slow_gpu_frequency,
+        slow_row_frequency,
+        slow_column_frequency,
+        dominant_phase_rank_matches,
+        dominant_phase_rank_mismatches,
+        rank_analysis_warnings,
+    ) = analyze_rank_records(rank_records, sample_by_key, phase_iteration_breakdown)
+    warnings.extend(rank_analysis_warnings)
 
     sequence = "".join(
         "S" if sample.key in stalls_by_sample else "F" for sample in samples
@@ -517,6 +845,15 @@ def analyze_case(result_dir: Path, threshold_override_us: Optional[float] = None
         phase_summaries=phase_summaries,
         phase_iteration_breakdown=phase_iteration_breakdown,
         stall_cause_classification=stall_cause_classification,
+        rank_event_breakdown=rank_event_breakdown,
+        rank_event_classification_frequency=rank_event_classification_frequency,
+        slow_rank_frequency=slow_rank_frequency,
+        slow_node_frequency=slow_node_frequency,
+        slow_gpu_frequency=slow_gpu_frequency,
+        slow_row_frequency=slow_row_frequency,
+        slow_column_frequency=slow_column_frequency,
+        dominant_phase_rank_matches=dominant_phase_rank_matches,
+        dominant_phase_rank_mismatches=dominant_phase_rank_mismatches,
         warnings=warnings,
     )
 
@@ -658,6 +995,44 @@ def markdown_report(summaries: Sequence[CaseSummary]) -> str:
                 )
         else:
             lines.append("None.")
+        lines.extend(["", "Per-rank stalled iteration classification:", ""])
+        if summary.rank_event_breakdown:
+            lines.append(
+                "| Halo | Sample | Iteration | Classification | Ranks >=80% | Nodes >=80% | Global max us | Max rank | CV |"
+            )
+            lines.append("| ---: | ---: | ---: | --- | ---: | --- | ---: | ---: | ---: |")
+            for row in summary.rank_event_breakdown:
+                nodes = ", ".join(row["nodes_ge_80pct"]) or "n/a"
+                lines.append(
+                    f"| {row['halo_words']} | {row['sample_index']} | "
+                    f"{row['iteration_index']} | {row['classification']} | "
+                    f"{row['ranks_ge_80pct']} | {nodes} | "
+                    f"{row['global_max_us']:.3f} | {row['global_max_rank']} | "
+                    f"{row['coefficient_of_variation']:.3f} |"
+                )
+            lines.extend(["", "Slow-rank frequency (>=80% of global max):", ""])
+            if summary.slow_rank_frequency:
+                lines.append("| Rank | Events |")
+                lines.append("| ---: | ---: |")
+                for rank, count in summary.slow_rank_frequency.items():
+                    lines.append(f"| {rank} | {count} |")
+            else:
+                lines.append("None.")
+            lines.extend(["", "Slow-node frequency (>=80% of global max):", ""])
+            if summary.slow_node_frequency:
+                lines.append("| Node | Events |")
+                lines.append("| --- | ---: |")
+                for node, count in summary.slow_node_frequency.items():
+                    lines.append(f"| {node} | {count} |")
+            else:
+                lines.append("None.")
+            lines.append(
+                f"\nDominant phase rank matches total max rank: "
+                f"{summary.dominant_phase_rank_matches}; mismatches: "
+                f"{summary.dominant_phase_rank_mismatches}"
+            )
+        else:
+            lines.append("No stalled-rank data available.")
         if summary.warnings:
             lines.extend(["", "Warnings:"])
             for warning in summary.warnings:
@@ -697,6 +1072,9 @@ def write_csv_summary(path: Path, summaries: Sequence[CaseSummary]) -> None:
                 "nearly_all_slow_samples",
                 "stalled_iterations_with_phase_data",
                 "stall_cause_classification",
+                "rank_event_classifications",
+                "dominant_phase_rank_matches",
+                "dominant_phase_rank_mismatches",
                 "sample_sequence",
             ],
         )
@@ -730,6 +1108,12 @@ def write_csv_summary(path: Path, summaries: Sequence[CaseSummary]) -> None:
                     "nearly_all_slow_samples": summary.nearly_all_slow_samples,
                     "stalled_iterations_with_phase_data": summary.stalled_iterations_with_phase_data,
                     "stall_cause_classification": summary.stall_cause_classification,
+                    "rank_event_classifications": json.dumps(
+                        summary.rank_event_classification_frequency,
+                        sort_keys=True,
+                    ),
+                    "dominant_phase_rank_matches": summary.dominant_phase_rank_matches,
+                    "dominant_phase_rank_mismatches": summary.dominant_phase_rank_mismatches,
                     "sample_sequence": summary.sample_sequence,
                 }
             )
@@ -775,6 +1159,15 @@ def summary_to_json(summary: CaseSummary) -> Dict[str, Any]:
         "nearly_all_slow_samples": summary.nearly_all_slow_samples,
         "stalled_iterations_with_phase_data": summary.stalled_iterations_with_phase_data,
         "stall_cause_classification": summary.stall_cause_classification,
+        "rank_event_breakdown": summary.rank_event_breakdown,
+        "rank_event_classification_frequency": summary.rank_event_classification_frequency,
+        "slow_rank_frequency": summary.slow_rank_frequency,
+        "slow_node_frequency": summary.slow_node_frequency,
+        "slow_gpu_frequency": summary.slow_gpu_frequency,
+        "slow_row_frequency": summary.slow_row_frequency,
+        "slow_column_frequency": summary.slow_column_frequency,
+        "dominant_phase_rank_matches": summary.dominant_phase_rank_matches,
+        "dominant_phase_rank_mismatches": summary.dominant_phase_rank_mismatches,
         "phase_summaries": [
             {
                 "phase_name": phase.phase_name,

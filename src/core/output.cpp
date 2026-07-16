@@ -113,9 +113,36 @@ std::size_t total_iteration_phase_records_emitted(
   return total;
 }
 
+std::size_t total_stalled_rank_iterations_recorded(
+    const std::vector<BenchmarkResult>& results) {
+  std::size_t total = 0;
+  for (const auto& result : results) {
+    total += result.stalled_rank_iterations_recorded;
+  }
+  return total;
+}
+
+std::size_t total_stalled_rank_rows_emitted(
+    const std::vector<BenchmarkResult>& results) {
+  std::size_t total = 0;
+  for (const auto& result : results) {
+    total += result.stalled_rank_rows_emitted;
+  }
+  return total;
+}
+
 bool has_iteration_phase_timing(const std::vector<BenchmarkResult>& results) {
   for (const auto& result : results) {
     if (result.iteration_phase_timing_enabled) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool has_stalled_rank_timing(const std::vector<BenchmarkResult>& results) {
+  for (const auto& result : results) {
+    if (result.stalled_rank_timing_enabled) {
       return true;
     }
   }
@@ -368,6 +395,15 @@ void write_console(std::ostream& out,
     out << "  schema: " << results.front().iteration_phase_backend_schema
         << "\n";
   }
+
+  if (has_stalled_rank_timing(results)) {
+    out << "\nStalled-rank timing diagnostics:\n";
+    out << "  stalled iterations recorded: "
+        << total_stalled_rank_iterations_recorded(results) << "\n";
+    out << "  rank rows emitted: " << total_stalled_rank_rows_emitted(results)
+        << "\n";
+    out << "  schema: " << results.front().stalled_rank_schema << "\n";
+  }
 }
 
 void write_csv(const std::string& path,
@@ -557,6 +593,17 @@ void write_json(const std::string& path,
     out << ",\n";
     out << "        \"iteration_phase_stall_threshold_us\": "
         << r.iteration_phase_stall_threshold_us << ",\n";
+    out << "        \"stalled_rank_timing_enabled\": "
+        << (r.stalled_rank_timing_enabled ? "true" : "false") << ",\n";
+    out << "        \"stalled_rank_iterations_recorded\": "
+        << r.stalled_rank_iterations_recorded << ",\n";
+    out << "        \"stalled_rank_rows_emitted\": "
+        << r.stalled_rank_rows_emitted << ",\n";
+    out << "        \"stalled_rank_schema\": ";
+    write_json_string(out, r.stalled_rank_schema);
+    out << ",\n";
+    out << "        \"stalled_rank_stall_threshold_us\": "
+        << r.stalled_rank_stall_threshold_us << ",\n";
     if (r.metadata.phase_timing_enabled) {
       out << "        \"phase_timing_metadata\": {\n";
       out << "          \"enabled\": true,\n";
@@ -708,6 +755,63 @@ void write_iteration_phase_times_csv(
       write_json_string(out, record.phase_name);
       out << ',' << record.phase_seconds << ',' << record.phase_max_rank
           << '\n';
+    }
+  }
+}
+
+void write_stalled_rank_times_csv(
+    const std::string& path, const std::vector<BenchmarkResult>& results) {
+  std::ofstream out(path);
+  require_stream(out, path);
+  out << "version,backend,rccl_sync_mode,world_size,halo_words,"
+         "sample_index,sample_count,iteration_index,iterations_in_sample,"
+         "stall_threshold_us,world_rank,local_rank,hostname,"
+         "selected_hip_device,cart_rank,cart_row,cart_col,"
+         "local_total_iteration_seconds,global_max_iteration_seconds,"
+         "global_max_iteration_rank,backend_schema,"
+         "north_south_communication_seconds,north_south_sync_seconds,"
+         "transpose_copy_seconds,transpose_sync_seconds,"
+         "east_west_communication_seconds,east_west_sync_seconds,"
+         "north_south_enqueue_seconds,transpose_enqueue_seconds,"
+         "east_west_enqueue_seconds,final_stream_sync_seconds,"
+         "input_device_copy_seconds,north_south_mpi_seconds,"
+         "transpose_device_copy_seconds,transpose_copy_sync_seconds,"
+         "east_west_mpi_seconds\n";
+  out << std::scientific << std::setprecision(12);
+  for (const auto& result : results) {
+    for (const auto& record : result.stalled_rank_times) {
+      const auto& phase = record.local_phase;
+      out << version << ',';
+      write_json_string(out, record.backend);
+      out << ',';
+      write_json_string(out, record.rccl_sync_mode);
+      out << ',' << record.world_size << ',' << record.halo_words << ','
+          << record.sample_index << ',' << record.sample_count << ','
+          << record.iteration_index << ',' << record.iterations_in_sample
+          << ',' << record.stall_threshold_us << ',' << record.world_rank
+          << ',' << record.local_rank << ',';
+      write_json_string(out, record.hostname);
+      out << ',' << record.selected_hip_device << ',' << record.cart_rank
+          << ',' << record.cart_row << ',' << record.cart_col << ','
+          << record.local_total_iteration_seconds << ','
+          << record.global_max_iteration_seconds << ','
+          << record.global_max_iteration_rank << ',';
+      write_json_string(out, record.schema);
+      out << ',' << phase.north_south_communication_seconds << ','
+          << phase.north_south_sync_seconds << ','
+          << phase.transpose_copy_seconds << ','
+          << phase.transpose_sync_seconds << ','
+          << phase.east_west_communication_seconds << ','
+          << phase.east_west_sync_seconds << ','
+          << phase.north_south_communication_enqueue_seconds << ','
+          << phase.transpose_copy_enqueue_seconds << ','
+          << phase.east_west_communication_enqueue_seconds << ','
+          << phase.final_stream_sync_seconds << ','
+          << phase.input_device_copy_seconds << ','
+          << phase.north_south_mpi_seconds << ','
+          << phase.transpose_device_copy_seconds << ','
+          << phase.transpose_copy_sync_seconds << ','
+          << phase.east_west_mpi_seconds << '\n';
     }
   }
 }

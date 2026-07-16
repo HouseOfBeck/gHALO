@@ -646,7 +646,7 @@ test_submit_dry_run() (
   assert_contains "scripts/batch-job.sh ${ROOT}" \
     "${output}" "repo root follows batch-job path"
   assert_contains 'dry\ run\ label' "${output}" "label is shell escaped"
-  assert_contains ' 1 1 1000 0 0 0 ' "${output}" \
+  assert_contains ' 1 1 0 1000 0 0 0 ' "${output}" \
     "dry-run forwards iteration phase timing batch arguments"
 
   GHALO_SYSTEM_NAME=frontier "${ROOT}/scripts/submit.sh" \
@@ -685,7 +685,7 @@ test_submit_rank_layout_failure() (
 test_batch_job_requires_slurm() (
   local output="${GHALO_TEST_TMPDIR}/ghalo-batch-job-no-slurm.txt"
   if env -u SLURM_JOB_ID "${ROOT}/scripts/batch-job.sh" \
-    "${ROOT}" frontier mpi TEST123 batch 1 4 4 0.1 2 1024 2 1 0 0 "" 0 0 0 "" "" smoke "" submit out err \
+    "${ROOT}" frontier mpi TEST123 batch 1 4 4 0.1 2 1024 2 1 0 0 0 "" 0 0 0 "" "" smoke "" submit out err \
     >"${output}" 2>&1; then
     printf 'expected batch-job without SLURM_JOB_ID to fail\n' >&2
     exit 1
@@ -730,6 +730,7 @@ EOF
     1 \
     1 \
     1 \
+    0 \
     1000 \
     0 \
     0 \
@@ -942,6 +943,35 @@ test_iteration_phase_sbatch_scripts() (
     "Frontier phase diagnostic uses batch partition"
 )
 
+test_stalled_rank_sbatch_scripts() (
+  local borg_script="${ROOT}/slurm/borg_stalled_rank_diagnostic.sbatch"
+  local frontier_script="${ROOT}/slurm/frontier_stalled_rank_diagnostic.sbatch"
+  for script in "${borg_script}" "${frontier_script}"; do
+    assert_contains '--record-iteration-times' "${script}" \
+      "stalled-rank diagnostic records iteration timing"
+    assert_contains '--record-iteration-phase-times' "${script}" \
+      "stalled-rank diagnostic records phase timing"
+    assert_contains '--record-stalled-rank-times' "${script}" \
+      "stalled-rank diagnostic records per-rank timing"
+    assert_contains '--iteration-stall-threshold-us 1000' "${script}" \
+      "stalled-rank diagnostic uses requested threshold"
+    assert_contains '--samples-per-halo 100' "${script}" \
+      "stalled-rank diagnostic uses persistent samples"
+    assert_contains 'stalled-rank-rccl-conservative-halo128' "${script}" \
+      "stalled-rank diagnostic labels conservative case"
+    assert_contains 'stalled-rank-rccl-stream-halo64' "${script}" \
+      "stalled-rank diagnostic labels stream case"
+    assert_contains 'stalled-rank-mpi-hip-halo128' "${script}" \
+      "stalled-rank diagnostic labels MPI-HIP case"
+  done
+  assert_contains '#SBATCH -p testing' "${borg_script}" \
+    "Borg stalled-rank diagnostic uses testing partition"
+  assert_contains '#SBATCH --reservation=jlbeck.testing' "${borg_script}" \
+    "Borg stalled-rank diagnostic uses requested reservation"
+  assert_contains '#SBATCH -p batch' "${frontier_script}" \
+    "Frontier stalled-rank diagnostic uses batch partition"
+)
+
 test_borg_build_alias_resolution
 test_native_default_for_generic_system
 test_missing_aliased_binary_error
@@ -968,3 +998,4 @@ test_validation_suite_verifies_results
 test_migrate_results_dry_run
 test_borg_iteration_stall_sbatch
 test_iteration_phase_sbatch_scripts
+test_stalled_rank_sbatch_scripts

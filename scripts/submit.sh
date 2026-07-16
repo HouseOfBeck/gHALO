@@ -29,6 +29,7 @@ Options:
   --record-iteration-times      Write per-iteration max-rank timing diagnostics.
   --record-iteration-phase-times
                                 Write per-phase timing for threshold-matched iterations.
+  --record-stalled-rank-times   Write per-rank timing rows for stalled iterations.
   --iteration-stall-threshold-us VALUE
                                 Emit iteration timing records at or above VALUE us.
                                 Default/zero emits every measured iteration.
@@ -83,6 +84,7 @@ halo_multiplier="2"
 samples_per_halo="1"
 record_iteration_times=0
 record_iteration_phase_times=0
+record_stalled_rank_times=0
 iteration_stall_threshold_us=""
 validate=0
 phase_timing=0
@@ -176,6 +178,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --record-iteration-phase-times)
       record_iteration_phase_times=1
+      shift
+      ;;
+    --record-stalled-rank-times)
+      record_stalled_rank_times=1
       shift
       ;;
     --iteration-stall-threshold-us)
@@ -320,6 +326,11 @@ if [[ "${record_iteration_phase_times}" -eq 1 &&
       "${record_iteration_times}" -ne 1 ]]; then
   ghalo_die "--record-iteration-phase-times requires --record-iteration-times"
 fi
+if [[ "${record_stalled_rank_times}" -eq 1 &&
+      ( "${record_iteration_times}" -ne 1 ||
+        "${record_iteration_phase_times}" -ne 1 ) ]]; then
+  ghalo_die "--record-stalled-rank-times requires --record-iteration-times and --record-iteration-phase-times"
+fi
 [[ "${halo_multiplier}" -gt 1 ]] ||
   ghalo_die "--halo-multiplier must be greater than 1"
 [[ "${max_halo}" -ge "${min_halo}" ]] ||
@@ -406,6 +417,7 @@ sbatch_command+=(
   "${samples_per_halo}"
   "${record_iteration_times}"
   "${record_iteration_phase_times}"
+  "${record_stalled_rank_times}"
   "${iteration_stall_threshold_us}"
   "${validate}"
   "${phase_timing}"

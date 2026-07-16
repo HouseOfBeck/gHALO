@@ -386,6 +386,49 @@ Single-run comparisons and percent-difference plots are observed differences,
 not statistical conclusions. Positive percent differences mean run B was slower
 than run A; negative values mean run B was faster.
 
+## Iteration Stall Diagnostics
+
+`tools/analyze_iteration_stalls.py` analyzes optional per-iteration diagnostic
+files emitted by `scripts/run.sh`. When `stalled-rank-times.csv` is present,
+the analyzer also reports rank-local stall structure for threshold-matched
+iterations:
+
+```sh
+python3 tools/analyze_iteration_stalls.py \
+  --system frontier \
+  --rocm-version 6.4.2 \
+  --category repeatability \
+  --label-filter stalled-rank \
+  --threshold-us 1000 \
+  --output-dir analysis/frontier-stalled-rank
+```
+
+Generate the rank-level input with:
+
+```sh
+--record-iteration-times \
+--record-iteration-phase-times \
+--record-stalled-rank-times \
+--iteration-stall-threshold-us 1000
+```
+
+`stalled-rank-times.csv` is threshold-filtered. It contains one row per rank
+only for iterations that crossed the global stall threshold; it is not a full
+per-rank trace of every measured iteration. The analyzer classifies each
+stalled iteration as `collective-wide`, `rank-localized`, `node-localized`,
+`row-localized`, `column-localized`, or `mixed` based on which ranks are within
+80% of the global maximum.
+
+Packaged 8-node experiments are available for Borg and Frontier:
+
+```sh
+sbatch slurm/borg_stalled_rank_diagnostic.sbatch
+sbatch slurm/frontier_stalled_rank_diagnostic.sbatch
+```
+
+Use the rank, node, GPU, Cartesian row, and Cartesian column frequency tables
+to distinguish a single bad participant from a collective-wide slow sample.
+
 ## Phase Timing
 
 When phase timing is present, use:

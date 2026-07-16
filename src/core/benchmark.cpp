@@ -20,6 +20,8 @@ struct TimedExchangeResult {
   std::size_t stall_count{};
   std::vector<IterationTimingRecord> records;
   std::vector<IterationPhaseTimingRecord> phase_records;
+  std::vector<StalledIterationLocalRecord> stalled_local_records;
+  std::vector<StalledRankTimingRecord> stalled_rank_records;
 };
 
 struct PhaseValue {
@@ -91,7 +93,7 @@ std::vector<PhaseValue> phase_values_for_schema(
 TimedExchangeResult time_exchanges_with_iteration_records(
     Backend& backend, int iterations, std::size_t halo_words,
     std::size_t sample_index, std::size_t sample_count, double threshold_us,
-    bool record_phase_times) {
+    bool record_phase_times, bool record_stalled_rank_times) {
   TimedExchangeResult result;
   result.total_observed = static_cast<std::size_t>(iterations);
   result.local_iteration_seconds.reserve(static_cast<std::size_t>(iterations));
@@ -146,6 +148,18 @@ TimedExchangeResult time_exchanges_with_iteration_records(
                                 metadata.rccl_sync_mode,
                                 topology.world_size});
       ++result.records_emitted;
+      if (record_stalled_rank_times) {
+        PhaseTimingResult local_phase;
+        if (record_phase_times && i < result.local_iteration_phases.size()) {
+          local_phase = result.local_iteration_phases[i];
+        }
+        result.stalled_local_records.push_back(
+            StalledIterationLocalRecord{i + 1,
+                                        result.local_iteration_seconds[i],
+                                        reduced.seconds,
+                                        reduced.rank,
+                                        local_phase});
+      }
     }
   }
 
@@ -193,6 +207,11 @@ TimedExchangeResult time_exchanges_with_iteration_records(
             phase_reduction.rank});
       }
     }
+  }
+  if (record_stalled_rank_times) {
+    result.stalled_rank_records = backend.gather_stalled_rank_timings(
+        halo_words, sample_index, sample_count, iterations, threshold_us,
+        phase_schema, result.stalled_local_records);
   }
   return result;
 }
@@ -262,6 +281,17 @@ std::vector<BenchmarkResult> run_benchmark(Backend& backend,
           "iteration phase timing requires a backend with phase timing support");
     }
   }
+  if (config.record_stalled_rank_times) {
+    if (!config.record_iteration_times || !config.record_iteration_phase_times) {
+      throw std::invalid_argument(
+          "record_stalled_rank_times requires record_iteration_times and "
+          "record_iteration_phase_times");
+    }
+    if (!backend.supports_phase_timing()) {
+      throw std::invalid_argument(
+          "stalled rank timing requires a backend with phase timing support");
+    }
+  }
 
   const std::vector<std::size_t> halo_lengths =
       config.halo_lengths.empty()
@@ -306,7 +336,8 @@ std::vector<BenchmarkResult> run_benchmark(Backend& backend,
         iteration_timing = time_exchanges_with_iteration_records(
             backend, iterations, halo_words, sample,
             config.samples_per_halo, config.iteration_stall_threshold_us,
-            config.record_iteration_phase_times);
+            config.record_iteration_phase_times,
+            config.record_stalled_rank_times);
         measured_local = iteration_timing.local_total_seconds;
       } else {
         measured_local = time_exchanges(backend, iterations);
@@ -341,6 +372,16 @@ std::vector<BenchmarkResult> run_benchmark(Backend& backend,
           iteration_timing.phase_records.size();
       result.iteration_phase_times =
           std::move(iteration_timing.phase_records);
+      result.stalled_rank_timing_enabled = config.record_stalled_rank_times;
+      result.stalled_rank_iterations_recorded =
+          iteration_timing.stalled_local_records.size();
+      result.stalled_rank_rows_emitted =
+          iteration_timing.stalled_rank_records.size();
+      result.stalled_rank_schema = result.iteration_phase_backend_schema;
+      result.stalled_rank_stall_threshold_us =
+          config.iteration_stall_threshold_us;
+      result.stalled_rank_times =
+          std::move(iteration_timing.stalled_rank_records);
       result.max_total_seconds = measured_max;
       result.max_average_seconds =
           measured_max / static_cast<double>(iterations);

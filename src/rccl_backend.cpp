@@ -11,11 +11,26 @@
 #include <memory>
 #include <sstream>
 #include <stdexcept>
+#include <tuple>
 #include <unistd.h>
 #include <vector>
 
 namespace ghalo {
 namespace {
+
+struct PackedStalledRankTiming {
+  int iteration_index;
+  int world_rank;
+  int local_rank;
+  int selected_hip_device;
+  int cart_rank;
+  int cart_row;
+  int cart_col;
+  double local_total_iteration_seconds;
+  double global_max_iteration_seconds;
+  int global_max_iteration_rank;
+  PhaseTimingResult local_phase;
+};
 
 void mpi_check(int error, const char* operation) {
   if (error != MPI_SUCCESS) {
@@ -35,6 +50,15 @@ std::string hostname() {
     return "unknown";
   }
   return name;
+}
+
+RankMetadata rank_metadata_for(const BackendMetadata& metadata, int rank) {
+  for (const auto& candidate : metadata.ranks) {
+    if (candidate.world_rank == rank) {
+      return candidate;
+    }
+  }
+  return {};
 }
 
 std::string getenv_string(const char* name) {
@@ -451,6 +475,101 @@ std::vector<IterationTimingReduction> RCCLBackend::max_time_ranks(
     reductions.push_back({entry.seconds, entry.rank});
   }
   return reductions;
+}
+
+std::vector<StalledRankTimingRecord> RCCLBackend::gather_stalled_rank_timings(
+    std::size_t halo_words, std::size_t sample_index,
+    std::size_t sample_count, int iterations_in_sample,
+    double stall_threshold_us, const std::string& backend_schema,
+    const std::vector<StalledIterationLocalRecord>& local_records) {
+  int local_count = static_cast<int>(local_records.size());
+  int min_count = 0;
+  int max_count = 0;
+  mpi_check(MPI_Allreduce(&local_count, &min_count, 1, MPI_INT, MPI_MIN,
+                          cart_comm_),
+            "MPI_Allreduce stalled rank min count");
+  mpi_check(MPI_Allreduce(&local_count, &max_count, 1, MPI_INT, MPI_MAX,
+                          cart_comm_),
+            "MPI_Allreduce stalled rank max count");
+  if (min_count != max_count) {
+    throw std::runtime_error(
+        "stalled rank timing gather received inconsistent local counts");
+  }
+  if (local_count == 0) {
+    return {};
+  }
+
+  std::vector<PackedStalledRankTiming> local;
+  local.reserve(local_records.size());
+  for (const auto& record : local_records) {
+    local.push_back(PackedStalledRankTiming{
+        static_cast<int>(record.iteration_index),
+        topology_.world_rank,
+        local_rank_,
+        selected_device_,
+        topology_.cart_rank,
+        topology_.row,
+        topology_.col,
+        record.local_total_iteration_seconds,
+        record.global_max_iteration_seconds,
+        record.global_max_iteration_rank,
+        record.local_phase});
+  }
+
+  std::vector<PackedStalledRankTiming> gathered;
+  if (is_root()) {
+    gathered.resize(static_cast<std::size_t>(topology_.world_size) *
+                    local_records.size());
+  }
+  mpi_check(MPI_Gather(local.data(),
+                       static_cast<int>(local.size() *
+                                        sizeof(PackedStalledRankTiming)),
+                       MPI_BYTE, is_root() ? gathered.data() : nullptr,
+                       static_cast<int>(local.size() *
+                                        sizeof(PackedStalledRankTiming)),
+                       MPI_BYTE, 0, cart_comm_),
+            "MPI_Gather stalled rank timing");
+
+  std::vector<StalledRankTimingRecord> records;
+  if (!is_root()) {
+    return records;
+  }
+  records.reserve(gathered.size());
+  for (const auto& packed : gathered) {
+    const auto rank_meta = rank_metadata_for(metadata_, packed.world_rank);
+    StalledRankTimingRecord record;
+    record.backend = name();
+    record.rccl_sync_mode = metadata_.rccl_sync_mode;
+    record.schema = backend_schema;
+    record.world_size = topology_.world_size;
+    record.halo_words = halo_words;
+    record.sample_index = sample_index;
+    record.sample_count = sample_count;
+    record.iteration_index =
+        static_cast<std::size_t>(packed.iteration_index);
+    record.iterations_in_sample = iterations_in_sample;
+    record.stall_threshold_us = stall_threshold_us;
+    record.world_rank = packed.world_rank;
+    record.local_rank = packed.local_rank;
+    record.hostname = rank_meta.hostname;
+    record.selected_hip_device = packed.selected_hip_device;
+    record.cart_rank = packed.cart_rank;
+    record.cart_row = packed.cart_row;
+    record.cart_col = packed.cart_col;
+    record.local_total_iteration_seconds =
+        packed.local_total_iteration_seconds;
+    record.global_max_iteration_seconds =
+        packed.global_max_iteration_seconds;
+    record.global_max_iteration_rank = packed.global_max_iteration_rank;
+    record.local_phase = packed.local_phase;
+    records.push_back(record);
+  }
+  std::sort(records.begin(), records.end(), [](const auto& lhs,
+                                               const auto& rhs) {
+    return std::tie(lhs.iteration_index, lhs.world_rank) <
+           std::tie(rhs.iteration_index, rhs.world_rank);
+  });
+  return records;
 }
 
 void RCCLBackend::run_development_validation(

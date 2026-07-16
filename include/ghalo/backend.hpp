@@ -82,6 +82,38 @@ struct IterationTimingReduction {
   int rank{};
 };
 
+struct StalledIterationLocalRecord {
+  std::size_t iteration_index{1};
+  double local_total_iteration_seconds{};
+  double global_max_iteration_seconds{};
+  int global_max_iteration_rank{};
+  PhaseTimingResult local_phase;
+};
+
+struct StalledRankTimingRecord {
+  std::string backend;
+  std::string rccl_sync_mode;
+  std::string schema;
+  int world_size{};
+  std::size_t halo_words{};
+  std::size_t sample_index{1};
+  std::size_t sample_count{1};
+  std::size_t iteration_index{1};
+  int iterations_in_sample{};
+  double stall_threshold_us{};
+  int world_rank{};
+  int local_rank{-1};
+  std::string hostname;
+  int selected_hip_device{-1};
+  int cart_rank{};
+  int cart_row{};
+  int cart_col{};
+  double local_total_iteration_seconds{};
+  double global_max_iteration_seconds{};
+  int global_max_iteration_rank{};
+  PhaseTimingResult local_phase;
+};
+
 inline double phase_timing_sum(const PhaseTimingResult& phase) {
   const bool has_generic_fields =
       phase.north_south_communication_seconds != 0.0 ||
@@ -141,6 +173,56 @@ public:
       reductions.push_back({max_time(seconds), rank()});
     }
     return reductions;
+  }
+  virtual std::vector<StalledRankTimingRecord> gather_stalled_rank_timings(
+      std::size_t halo_words, std::size_t sample_index,
+      std::size_t sample_count, int iterations_in_sample,
+      double stall_threshold_us, const std::string& backend_schema,
+      const std::vector<StalledIterationLocalRecord>& local_records) {
+    std::vector<StalledRankTimingRecord> records;
+    const auto topo = topology();
+    const auto meta = metadata();
+    RankMetadata rank_meta;
+    for (const auto& candidate : meta.ranks) {
+      if (candidate.world_rank == topo.world_rank) {
+        rank_meta = candidate;
+        break;
+      }
+    }
+    if (rank_meta.world_rank == 0 && topo.world_rank != 0) {
+      rank_meta.world_rank = topo.world_rank;
+      rank_meta.cart_rank = topo.cart_rank;
+      rank_meta.row = topo.row;
+      rank_meta.col = topo.col;
+    }
+    for (const auto& local : local_records) {
+      StalledRankTimingRecord record;
+      record.backend = name();
+      record.rccl_sync_mode = meta.rccl_sync_mode;
+      record.schema = backend_schema;
+      record.world_size = topo.world_size;
+      record.halo_words = halo_words;
+      record.sample_index = sample_index;
+      record.sample_count = sample_count;
+      record.iteration_index = local.iteration_index;
+      record.iterations_in_sample = iterations_in_sample;
+      record.stall_threshold_us = stall_threshold_us;
+      record.world_rank = topo.world_rank;
+      record.local_rank = rank_meta.local_rank;
+      record.hostname = rank_meta.hostname;
+      record.selected_hip_device = rank_meta.hip_device_index;
+      record.cart_rank = topo.cart_rank;
+      record.cart_row = topo.row;
+      record.cart_col = topo.col;
+      record.local_total_iteration_seconds =
+          local.local_total_iteration_seconds;
+      record.global_max_iteration_seconds =
+          local.global_max_iteration_seconds;
+      record.global_max_iteration_rank = local.global_max_iteration_rank;
+      record.local_phase = local.local_phase;
+      records.push_back(record);
+    }
+    return records;
   }
   virtual void run_development_validation(const std::vector<std::size_t>&) {
     throw std::runtime_error(

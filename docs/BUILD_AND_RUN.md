@@ -493,6 +493,69 @@ stream-ordered runs, compare north/south enqueue, transpose enqueue, east/west
 enqueue, and final stream sync. For MPI-HIP, compare the available GPU-aware MPI
 and synchronization phases.
 
+Use `--record-stalled-rank-times` with both `--record-iteration-times` and
+`--record-iteration-phase-times` to gather rank-local timing rows only for
+iterations that pass the global stall threshold. gHALO writes these records to
+`stalled-rank-times.csv`. The file contains one row per rank per stalled
+iteration, including node, GPU, Cartesian coordinate, local total iteration
+time, global max rank/time, and the backend-specific phase columns.
+
+This diagnostic intentionally runs outside the timed exchange loop. The timed
+sample first determines which iterations crossed the global threshold using the
+existing max-rank reduction. After the sample completes, gHALO gathers local
+rank rows only for those stalled iterations. No additional barriers,
+synchronization calls, or reductions are inserted into the measured exchange
+phases solely for this feature.
+
+Example Borg RCCL conservative rank-local diagnostic:
+
+```sh
+scripts/run.sh \
+  --system borg \
+  --backend rccl \
+  --nodes 8 \
+  --ranks 64 \
+  --ranks-per-node 8 \
+  --target-seconds 0.1 \
+  --min-halo 128 \
+  --max-halo 128 \
+  --samples-per-halo 100 \
+  --record-iteration-times \
+  --record-iteration-phase-times \
+  --record-stalled-rank-times \
+  --iteration-stall-threshold-us 1000 \
+  --validate \
+  --phase-timing \
+  --rccl-sync-mode conservative \
+  --category repeatability \
+  --label borg-stalled-rank-rccl-conservative-halo128
+```
+
+Submit the packaged rank-local batch experiments with:
+
+```sh
+sbatch slurm/borg_stalled_rank_diagnostic.sbatch
+sbatch slurm/frontier_stalled_rank_diagnostic.sbatch
+```
+
+Analyze rank-local diagnostics with:
+
+```sh
+python3 tools/analyze_iteration_stalls.py \
+  --system borg \
+  --rocm-version 6.4.2 \
+  --category repeatability \
+  --label-filter stalled-rank \
+  --threshold-us 1000 \
+  --output-dir analysis/borg-stalled-rank
+```
+
+The analyzer classifies each stalled iteration as `collective-wide`,
+`rank-localized`, `node-localized`, `row-localized`, `column-localized`, or
+`mixed` based on which ranks are within 80% of the global maximum. This helps
+distinguish a collective-wide slow mode from a bad rank, node, GPU, Cartesian
+row, or Cartesian column.
+
 ### Borg Iteration Stall Diagnostic
 
 The focused Borg stall diagnostic batch script compares RCCL conservative,

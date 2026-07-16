@@ -538,6 +538,51 @@ void test_iteration_phase_timing_records() {
   assert(result.iteration_phase_times.front().total_iteration_max_rank == 5);
 }
 
+void test_stalled_rank_timing_records() {
+  MockBackend backend(false, true);
+  backend.set_phase_timing_enabled(true);
+  backend.set_memory_location("device");
+  backend.set_iteration_timing_reduction(0.0, 0);
+  ghalo::BenchmarkConfig config;
+  config.target_seconds = 0.01;
+  config.calibration_iterations = 2;
+  config.min_halo = 2;
+  config.max_halo = 4;
+  config.halo_multiplier = 2;
+  config.record_iteration_times = true;
+  config.record_iteration_phase_times = true;
+  config.record_stalled_rank_times = true;
+  config.iteration_stall_threshold_us = 5000.0;
+
+  const auto results = ghalo::run_benchmark(backend, config);
+  assert(results.size() == 2);
+  std::size_t expected_rows = 0;
+  for (const auto& result : results) {
+    assert(result.stalled_rank_timing_enabled);
+    assert(result.stalled_rank_schema == "mpi-hip");
+    assert(result.stalled_rank_stall_threshold_us == 5000.0);
+    assert(result.stalled_rank_iterations_recorded ==
+           result.iteration_records_emitted);
+    assert(result.stalled_rank_rows_emitted ==
+           result.stalled_rank_times.size());
+    assert(result.stalled_rank_rows_emitted ==
+           result.stalled_rank_iterations_recorded);
+    expected_rows += result.stalled_rank_times.size();
+    if (!result.stalled_rank_times.empty()) {
+      const auto& record = result.stalled_rank_times.front();
+      assert(record.halo_words == result.halo_words);
+      assert(record.sample_index == result.sample_index);
+      assert(record.sample_count == result.sample_count);
+      assert(record.iterations_in_sample == result.iterations);
+      assert(record.stall_threshold_us == 5000.0);
+      assert(record.world_rank == 0);
+      assert(record.global_max_iteration_rank == 0);
+      assert(record.local_phase.north_south_mpi_seconds > 0.0);
+    }
+  }
+  assert(expected_rows > 0);
+}
+
 void test_north_south_stage_b_conceptual_plans() {
   check_north_south_plan(topology_for(1, 1, 0));
 
@@ -728,6 +773,14 @@ void test_cli_phase_timing_parse() {
   assert(iteration_phase_options.record_iteration_times);
   assert(iteration_phase_options.record_iteration_phase_times);
 
+  const auto stalled_rank_options =
+      parse_cli({"ghalo", "--record-iteration-times",
+                 "--record-iteration-phase-times",
+                 "--record-stalled-rank-times"});
+  assert(stalled_rank_options.record_iteration_times);
+  assert(stalled_rank_options.record_iteration_phase_times);
+  assert(stalled_rank_options.record_stalled_rank_times);
+
   for (const std::string backend : {"mpi", "mpi-hip", "rccl"}) {
     const auto range_options =
         parse_cli({"ghalo", "--backend", backend, "--min-halo", "8",
@@ -807,6 +860,15 @@ void test_cli_phase_timing_parse() {
     bad_phase_threw = true;
   }
   assert(bad_phase_threw);
+
+  bool bad_stalled_rank_threw = false;
+  try {
+    (void)parse_cli({"ghalo", "--record-iteration-times",
+                     "--record-stalled-rank-times"});
+  } catch (const std::invalid_argument&) {
+    bad_stalled_rank_threw = true;
+  }
+  assert(bad_stalled_rank_threw);
 
   const char* bad_argv_storage[] = {"ghalo", "--phase-timing", "--csv"};
   auto* bad_argv = const_cast<char**>(bad_argv_storage);
@@ -970,6 +1032,69 @@ void test_output_with_iteration_phase_timing() {
          std::string::npos);
   assert(json.find("\"iteration_phase_backend_schema\": "
                    "\"rccl-conservative\"") != std::string::npos);
+  assert_python_json_loads(json_path);
+}
+
+void test_output_with_stalled_rank_timing() {
+  auto result = sample_result();
+  result.iteration_timing_enabled = true;
+  result.iteration_phase_timing_enabled = true;
+  result.stalled_rank_timing_enabled = true;
+  result.stalled_rank_iterations_recorded = 1;
+  result.stalled_rank_rows_emitted = 1;
+  result.stalled_rank_schema = "mpi-hip";
+  result.stalled_rank_stall_threshold_us = 1000.0;
+  ghalo::PhaseTimingResult local_phase;
+  local_phase.input_device_copy_seconds = 0.0001;
+  local_phase.north_south_mpi_seconds = 0.0012;
+  local_phase.east_west_sync_seconds = 0.0003;
+  result.stalled_rank_times.push_back(
+      {"MPIHIPBackend",
+       "",
+       "mpi-hip",
+       1,
+       2,
+       1,
+       1,
+       3,
+       5,
+       1000.0,
+       0,
+       0,
+       "node0",
+       0,
+       0,
+       0,
+       0,
+       0.0018,
+       0.0018,
+       0,
+       local_phase});
+
+  ScopedTempDirectory temp;
+
+  std::ostringstream console;
+  ghalo::write_console(console, {result});
+  assert(console.str().find("Stalled-rank timing diagnostics") !=
+         std::string::npos);
+  assert(console.str().find("rank rows emitted: 1") != std::string::npos);
+
+  const auto csv_path = temp.file("stalled-rank-times.csv");
+  ghalo::write_stalled_rank_times_csv(csv_path.string(), {result});
+  const std::string csv = read_file(csv_path);
+  assert(csv.find("version,backend,rccl_sync_mode,world_size,halo_words") !=
+         std::string::npos);
+  assert(csv.find("\"MPIHIPBackend\"") != std::string::npos);
+  assert(csv.find("\"node0\"") != std::string::npos);
+
+  const auto json_path = temp.file("ghalo_core_smoke_stalled_rank.json");
+  ghalo::write_json(json_path.string(), {result});
+  const std::string json = read_file(json_path);
+  assert(json.find("\"stalled_rank_timing_enabled\": true") !=
+         std::string::npos);
+  assert(json.find("\"stalled_rank_rows_emitted\": 1") != std::string::npos);
+  assert(json.find("\"stalled_rank_schema\": \"mpi-hip\"") !=
+         std::string::npos);
   assert_python_json_loads(json_path);
 }
 
@@ -1175,6 +1300,7 @@ int main() {
   test_iteration_timing_records_are_halo_major_sample_minor();
   test_iteration_timing_threshold_filtering();
   test_iteration_phase_timing_records();
+  test_stalled_rank_timing_records();
   test_phase_sum_calculation();
   test_unsupported_phase_timing();
   test_cli_phase_timing_parse();
@@ -1183,6 +1309,7 @@ int main() {
   test_output_with_multiple_samples();
   test_output_with_iteration_timing();
   test_output_with_iteration_phase_timing();
+  test_output_with_stalled_rank_timing();
   test_json_string_escaping_is_strict();
   test_output_with_phase_timing();
   test_output_with_rccl_phase_timing();

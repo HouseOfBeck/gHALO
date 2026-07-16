@@ -27,6 +27,7 @@ struct CliOptions {
   bool rccl_stage_b = false;
   bool record_iteration_times = false;
   bool record_iteration_phase_times = false;
+  bool record_stalled_rank_times = false;
 };
 
 void print_usage(std::ostream& out);
