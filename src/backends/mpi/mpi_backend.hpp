@@ -44,6 +44,8 @@ public:
   void barrier() override;
   double now() const override;
   double max_time(double local_seconds) override;
+  std::vector<IterationTimingReduction> max_time_ranks(
+      const std::vector<double>& local_seconds) override;
 
 private:
   void initialize_topology();

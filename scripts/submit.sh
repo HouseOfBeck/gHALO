@@ -26,6 +26,10 @@ Options:
   --max-halo N                  Maximum halo length. Default: 1024.
   --halo-multiplier N           Halo length multiplier. Default: 2.
   --samples-per-halo N          Independent timed samples per halo. Default: 1.
+  --record-iteration-times      Write per-iteration max-rank timing diagnostics.
+  --iteration-stall-threshold-us VALUE
+                                Emit iteration timing records at or above VALUE us.
+                                Default/zero emits every measured iteration.
   --validate                    Pass --validate to gHALO.
   --phase-timing                Pass --phase-timing to gHALO.
   --rccl-stage-b                Run RCCL north/south Stage B validation only.
@@ -75,6 +79,8 @@ min_halo="2"
 max_halo="1024"
 halo_multiplier="2"
 samples_per_halo="1"
+record_iteration_times=0
+iteration_stall_threshold_us=""
 validate=0
 phase_timing=0
 rccl_stage_b=0
@@ -159,6 +165,15 @@ while [[ $# -gt 0 ]]; do
     --samples-per-halo)
       [[ $# -ge 2 ]] || ghalo_die "--samples-per-halo requires a value"
       samples_per_halo="$2"
+      shift 2
+      ;;
+    --record-iteration-times)
+      record_iteration_times=1
+      shift
+      ;;
+    --iteration-stall-threshold-us)
+      [[ $# -ge 2 ]] || ghalo_die "--iteration-stall-threshold-us requires a value"
+      iteration_stall_threshold_us="$2"
       shift 2
       ;;
     --validate)
@@ -290,6 +305,10 @@ is_positive_integer "${halo_multiplier}" ||
   ghalo_die "--halo-multiplier must be a positive integer"
 is_positive_integer "${samples_per_halo}" ||
   ghalo_die "--samples-per-halo must be a positive integer"
+if [[ -n "${iteration_stall_threshold_us}" ]]; then
+  [[ "${iteration_stall_threshold_us}" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]] ||
+    ghalo_die "--iteration-stall-threshold-us must be nonnegative"
+fi
 [[ "${halo_multiplier}" -gt 1 ]] ||
   ghalo_die "--halo-multiplier must be greater than 1"
 [[ "${max_halo}" -ge "${min_halo}" ]] ||
@@ -374,6 +393,8 @@ sbatch_command+=(
   "${max_halo}"
   "${halo_multiplier}"
   "${samples_per_halo}"
+  "${record_iteration_times}"
+  "${iteration_stall_threshold_us}"
   "${validate}"
   "${phase_timing}"
   "${rccl_stage_b}"

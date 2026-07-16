@@ -70,6 +70,22 @@ public:
 
   double max_time(double local_seconds) override { return local_seconds; }
 
+  std::vector<ghalo::IterationTimingReduction> max_time_ranks(
+      const std::vector<double>& local_seconds) override {
+    std::vector<ghalo::IterationTimingReduction> reductions;
+    reductions.reserve(local_seconds.size());
+    for (const double seconds : local_seconds) {
+      reductions.push_back({seconds + iteration_timing_offset_seconds_,
+                            iteration_timing_rank_});
+    }
+    return reductions;
+  }
+
+  void set_iteration_timing_reduction(double offset_seconds, int rank) {
+    iteration_timing_offset_seconds_ = offset_seconds;
+    iteration_timing_rank_ = rank;
+  }
+
   bool supports_phase_timing() const override { return phase_timing_supported_; }
 
   void set_phase_timing_enabled(bool enabled) override {
@@ -116,6 +132,8 @@ private:
   ghalo::PhaseTimingResult phase_timing_{};
   std::size_t halo_words_ = 0;
   double now_ = 0.0;
+  double iteration_timing_offset_seconds_ = 0.0;
+  int iteration_timing_rank_ = 0;
   int exchanges_ = 0;
   int setups_ = 0;
   int validations_ = 0;
@@ -254,12 +272,16 @@ void test_halo_length_generation() {
   assert(benchmark_defaults.max_halo == ghalo::default_max_halo);
   assert(benchmark_defaults.halo_multiplier == ghalo::default_halo_multiplier);
   assert(benchmark_defaults.samples_per_halo == 1);
+  assert(!benchmark_defaults.record_iteration_times);
+  assert(benchmark_defaults.iteration_stall_threshold_us == 0.0);
 
   const auto cli_defaults = parse_cli({"ghalo"});
   assert(cli_defaults.min_halo == ghalo::default_min_halo);
   assert(cli_defaults.max_halo == ghalo::default_max_halo);
   assert(cli_defaults.halo_multiplier == ghalo::default_halo_multiplier);
   assert(cli_defaults.samples_per_halo == 1);
+  assert(!cli_defaults.record_iteration_times);
+  assert(cli_defaults.iteration_stall_threshold_us == 0.0);
 
   const auto defaults = ghalo::generate_halo_lengths(
       ghalo::default_min_halo, ghalo::default_max_halo,
@@ -359,6 +381,92 @@ void test_benchmark_samples_per_halo() {
   try {
     config.samples_per_halo = 0;
     (void)ghalo::run_benchmark(backend, config);
+  } catch (const std::invalid_argument&) {
+    threw = true;
+  }
+  assert(threw);
+}
+
+void test_iteration_timing_records_are_halo_major_sample_minor() {
+  MockBackend backend(true, true);
+  backend.set_phase_timing_enabled(true);
+  backend.set_iteration_timing_reduction(0.001, 7);
+  ghalo::BenchmarkConfig config;
+  config.target_seconds = 0.01;
+  config.calibration_iterations = 2;
+  config.min_halo = 2;
+  config.max_halo = 4;
+  config.halo_multiplier = 2;
+  config.samples_per_halo = 2;
+  config.record_iteration_times = true;
+
+  const auto results = ghalo::run_benchmark(backend, config);
+  assert(results.size() == 4);
+  assert(backend.setups() == 2);
+  assert(backend.validations() == 4);
+
+  const std::vector<std::size_t> expected_halos{2, 2, 4, 4};
+  const std::vector<std::size_t> expected_samples{1, 2, 1, 2};
+  for (std::size_t i = 0; i < results.size(); ++i) {
+    const auto& result = results[i];
+    assert(result.halo_words == expected_halos[i]);
+    assert(result.sample_index == expected_samples[i]);
+    assert(result.sample_count == 2);
+    assert(result.iteration_timing_enabled);
+    assert(result.iteration_total_observed ==
+           static_cast<std::size_t>(result.iterations));
+    assert(result.iteration_records_emitted ==
+           static_cast<std::size_t>(result.iterations));
+    assert(result.iteration_stall_count == 0);
+    assert(result.iteration_times.size() ==
+           static_cast<std::size_t>(result.iterations));
+    assert(result.phase_timing.has_value());
+    for (std::size_t j = 0; j < result.iteration_times.size(); ++j) {
+      const auto& record = result.iteration_times[j];
+      assert(record.halo_words == result.halo_words);
+      assert(record.sample_index == result.sample_index);
+      assert(record.iteration_index == j + 1);
+      assert(record.max_rank == 7);
+      assert(record.backend == "MockBackend");
+      assert(record.world_size == 1);
+      assert(record.global_max_iteration_seconds > 0.0);
+    }
+  }
+}
+
+void test_iteration_timing_threshold_filtering() {
+  MockBackend backend;
+  ghalo::BenchmarkConfig config;
+  config.target_seconds = 0.01;
+  config.calibration_iterations = 2;
+  config.min_halo = 2;
+  config.max_halo = 2;
+  config.record_iteration_times = true;
+  config.iteration_stall_threshold_us = 5000.0;
+
+  const auto emitted = ghalo::run_benchmark(backend, config);
+  assert(emitted.size() == 1);
+  assert(emitted.front().iteration_total_observed ==
+         static_cast<std::size_t>(emitted.front().iterations));
+  assert(emitted.front().iteration_records_emitted ==
+         static_cast<std::size_t>(emitted.front().iterations));
+  assert(emitted.front().iteration_stall_count ==
+         static_cast<std::size_t>(emitted.front().iterations));
+
+  MockBackend filtered_backend;
+  config.iteration_stall_threshold_us = 20000.0;
+  const auto filtered = ghalo::run_benchmark(filtered_backend, config);
+  assert(filtered.size() == 1);
+  assert(filtered.front().iteration_total_observed ==
+         static_cast<std::size_t>(filtered.front().iterations));
+  assert(filtered.front().iteration_records_emitted == 0);
+  assert(filtered.front().iteration_stall_count == 0);
+  assert(filtered.front().iteration_times.empty());
+
+  config.iteration_stall_threshold_us = -1.0;
+  bool threw = false;
+  try {
+    (void)ghalo::run_benchmark(filtered_backend, config);
   } catch (const std::invalid_argument&) {
     threw = true;
   }
@@ -542,6 +650,12 @@ void test_cli_phase_timing_parse() {
       parse_cli({"ghalo", "--samples-per-halo", "50"});
   assert(sample_options.samples_per_halo == 50);
 
+  const auto iteration_options =
+      parse_cli({"ghalo", "--record-iteration-times",
+                 "--iteration-stall-threshold-us", "1000.5"});
+  assert(iteration_options.record_iteration_times);
+  assert(iteration_options.iteration_stall_threshold_us == 1000.5);
+
   for (const std::string backend : {"mpi", "mpi-hip", "rccl"}) {
     const auto range_options =
         parse_cli({"ghalo", "--backend", backend, "--min-halo", "8",
@@ -601,6 +715,17 @@ void test_cli_phase_timing_parse() {
       bad_sample_threw = true;
     }
     assert(bad_sample_threw);
+  }
+
+  for (const auto& bad_value : {"-1", "abc"}) {
+    bool bad_threshold_threw = false;
+    try {
+      (void)parse_cli(
+          {"ghalo", "--iteration-stall-threshold-us", bad_value});
+    } catch (const std::invalid_argument&) {
+      bad_threshold_threw = true;
+    }
+    assert(bad_threshold_threw);
   }
 
   const char* bad_argv_storage[] = {"ghalo", "--phase-timing", "--csv"};
@@ -680,6 +805,48 @@ void test_output_with_multiple_samples() {
   assert(json.find("\"sample_index\": 1") != std::string::npos);
   assert(json.find("\"sample_index\": 2") != std::string::npos);
   assert(json.find("\"sample_count\": 2") != std::string::npos);
+  assert_python_json_loads(json_path);
+}
+
+void test_output_with_iteration_timing() {
+  auto result = sample_result();
+  result.sample_index = 2;
+  result.sample_count = 3;
+  result.iteration_timing_enabled = true;
+  result.iteration_stall_threshold_us = 1000.0;
+  result.iteration_total_observed = 2;
+  result.iteration_records_emitted = 1;
+  result.iteration_stall_count = 1;
+  result.iteration_times.push_back(
+      {result.halo_words, 2, 1, 0.0015, 4, result.backend, "conservative",
+       result.topology.world_size});
+
+  ScopedTempDirectory temp;
+
+  std::ostringstream console;
+  ghalo::write_console(console, {result});
+  assert(console.str().find("Iteration timing diagnostics") !=
+         std::string::npos);
+  assert(console.str().find("records emitted: 1") != std::string::npos);
+
+  const auto csv_path = temp.file("iteration-times.csv");
+  ghalo::write_iteration_times_csv(csv_path.string(), {result});
+  const std::string csv = read_file(csv_path);
+  assert(csv.find("halo_words,sample_index,iteration_index,"
+                  "global_max_iteration_seconds,max_rank,backend,"
+                  "rccl_sync_mode,world_size") != std::string::npos);
+  assert(csv.find("2,2,1,1.500000000000e-03,4,MockBackend,"
+                  "\"conservative\",1") != std::string::npos);
+
+  const auto json_path = temp.file("ghalo_core_smoke_iteration.json");
+  ghalo::write_json(json_path.string(), {result});
+  const std::string json = read_file(json_path);
+  assert(json.find("\"iteration_timing_enabled\": true") !=
+         std::string::npos);
+  assert(json.find("\"iteration_stall_threshold_us\":") !=
+         std::string::npos);
+  assert(json.find("\"iteration_records_emitted\": 1") != std::string::npos);
+  assert(json.find("\"iteration_stall_count\": 1") != std::string::npos);
   assert_python_json_loads(json_path);
 }
 
@@ -882,12 +1049,15 @@ int main() {
   test_halo_length_generation();
   test_benchmark_uses_configured_halo_lengths();
   test_benchmark_samples_per_halo();
+  test_iteration_timing_records_are_halo_major_sample_minor();
+  test_iteration_timing_threshold_filtering();
   test_phase_sum_calculation();
   test_unsupported_phase_timing();
   test_cli_phase_timing_parse();
   test_development_validation_refusal();
   test_output_without_phase_timing_is_unchanged();
   test_output_with_multiple_samples();
+  test_output_with_iteration_timing();
   test_json_string_escaping_is_strict();
   test_output_with_phase_timing();
   test_output_with_rccl_phase_timing();

@@ -77,6 +77,33 @@ bool has_multiple_samples(const std::vector<BenchmarkResult>& results) {
   return false;
 }
 
+bool has_iteration_timing(const std::vector<BenchmarkResult>& results) {
+  for (const auto& result : results) {
+    if (result.iteration_timing_enabled) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::size_t total_iteration_records_emitted(
+    const std::vector<BenchmarkResult>& results) {
+  std::size_t total = 0;
+  for (const auto& result : results) {
+    total += result.iteration_records_emitted;
+  }
+  return total;
+}
+
+std::size_t total_iteration_stall_count(
+    const std::vector<BenchmarkResult>& results) {
+  std::size_t total = 0;
+  for (const auto& result : results) {
+    total += result.iteration_stall_count;
+  }
+  return total;
+}
+
 bool has_input_device_copy_phase(const std::vector<BenchmarkResult>& results) {
   for (const auto& result : results) {
     if (result.phase_timing.has_value() &&
@@ -292,6 +319,28 @@ void write_console(std::ostream& out,
           << phase_total_minus_sum(phase) * us << "\n";
     }
   }
+
+  if (has_iteration_timing(results)) {
+    out << "\nIteration timing diagnostics:\n";
+    out << "  records emitted: " << total_iteration_records_emitted(results)
+        << "\n";
+    out << "  stall count: " << total_iteration_stall_count(results) << "\n";
+    out << "  threshold_us: " << results.front().iteration_stall_threshold_us
+        << " (0 emits every measured iteration)\n";
+    if (has_multiple_samples(results)) {
+      out << std::setw(8) << "N" << std::setw(10) << "sample"
+          << std::setw(12) << "observed" << std::setw(12) << "emitted"
+          << std::setw(10) << "stalls" << "\n";
+      out << std::string(52, '-') << "\n";
+      for (const auto& result : results) {
+        out << std::setw(8) << result.halo_words << std::setw(10)
+            << result.sample_index << std::setw(12)
+            << result.iteration_total_observed << std::setw(12)
+            << result.iteration_records_emitted << std::setw(10)
+            << result.iteration_stall_count << "\n";
+      }
+    }
+  }
 }
 
 void write_csv(const std::string& path,
@@ -462,6 +511,16 @@ void write_json(const std::string& path,
         << (r.metadata.validation_enabled ? "true" : "false") << ",\n";
     out << "        \"validation_passed\": "
         << (r.metadata.validation_passed ? "true" : "false") << ",\n";
+    out << "        \"iteration_timing_enabled\": "
+        << (r.iteration_timing_enabled ? "true" : "false") << ",\n";
+    out << "        \"iteration_stall_threshold_us\": "
+        << r.iteration_stall_threshold_us << ",\n";
+    out << "        \"iteration_total_observed\": "
+        << r.iteration_total_observed << ",\n";
+    out << "        \"iteration_records_emitted\": "
+        << r.iteration_records_emitted << ",\n";
+    out << "        \"iteration_stall_count\": "
+        << r.iteration_stall_count << ",\n";
     if (r.metadata.phase_timing_enabled) {
       out << "        \"phase_timing_metadata\": {\n";
       out << "          \"enabled\": true,\n";
@@ -565,6 +624,26 @@ void write_json(const std::string& path,
 
   out << "  ]\n";
   out << "}\n";
+}
+
+void write_iteration_times_csv(const std::string& path,
+                               const std::vector<BenchmarkResult>& results) {
+  std::ofstream out(path);
+  require_stream(out, path);
+  out << "halo_words,sample_index,iteration_index,"
+         "global_max_iteration_seconds,max_rank,backend,rccl_sync_mode,"
+         "world_size\n";
+  out << std::scientific << std::setprecision(12);
+  for (const auto& result : results) {
+    for (const auto& record : result.iteration_times) {
+      out << record.halo_words << ',' << record.sample_index << ','
+          << record.iteration_index << ','
+          << record.global_max_iteration_seconds << ',' << record.max_rank
+          << ',' << record.backend << ',';
+      write_json_string(out, record.rccl_sync_mode);
+      out << ',' << record.world_size << '\n';
+    }
+  }
 }
 
 } // namespace ghalo

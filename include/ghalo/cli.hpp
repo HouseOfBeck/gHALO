@@ -19,11 +19,13 @@ struct CliOptions {
   std::size_t halo_multiplier = default_halo_multiplier;
   std::size_t samples_per_halo = 1;
   double target_seconds = 3.0;
+  double iteration_stall_threshold_us = 0.0;
   bool show_help = false;
   bool validate = true;
   bool allow_gpu_oversubscription = false;
   bool phase_timing = false;
   bool rccl_stage_b = false;
+  bool record_iteration_times = false;
 };
 
 void print_usage(std::ostream& out);

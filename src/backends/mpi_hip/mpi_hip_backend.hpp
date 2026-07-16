@@ -54,6 +54,8 @@ public:
   void barrier() override;
   double now() const override;
   double max_time(double local_seconds) override;
+  std::vector<IterationTimingReduction> max_time_ranks(
+      const std::vector<double>& local_seconds) override;
   bool supports_phase_timing() const override;
   void set_phase_timing_enabled(bool enabled) override;
   bool phase_timing_enabled() const override;

@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace ghalo {
@@ -16,7 +17,20 @@ struct BenchmarkConfig {
   std::size_t samples_per_halo = 1;
   std::vector<std::size_t> halo_lengths{};
   double target_seconds = 3.0;
+  bool record_iteration_times = false;
+  double iteration_stall_threshold_us = 0.0;
   int calibration_iterations = 5;
+};
+
+struct IterationTimingRecord {
+  std::size_t halo_words{};
+  std::size_t sample_index{1};
+  std::size_t iteration_index{1};
+  double global_max_iteration_seconds{};
+  int max_rank{};
+  std::string backend;
+  std::string rccl_sync_mode;
+  int world_size{};
 };
 
 struct BenchmarkResult {
@@ -35,6 +49,12 @@ struct BenchmarkResult {
   TopologyInfo topology;
   BackendMetadata metadata;
   std::optional<PhaseTimingResult> phase_timing;
+  bool iteration_timing_enabled = false;
+  double iteration_stall_threshold_us = 0.0;
+  std::size_t iteration_total_observed = 0;
+  std::size_t iteration_records_emitted = 0;
+  std::size_t iteration_stall_count = 0;
+  std::vector<IterationTimingRecord> iteration_times;
 };
 
 std::vector<BenchmarkResult> run_benchmark(Backend& backend,

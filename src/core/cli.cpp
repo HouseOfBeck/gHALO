@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <limits>
 #include <ostream>
 #include <stdexcept>
@@ -27,6 +28,19 @@ std::size_t parse_positive_size(const std::string& value,
   return static_cast<std::size_t>(parsed);
 }
 
+double parse_nonnegative_double(const std::string& value,
+                                const std::string& option) {
+  if (value.empty()) {
+    throw std::invalid_argument(option + " must be nonnegative");
+  }
+  std::size_t consumed = 0;
+  const double parsed = std::stod(value, &consumed);
+  if (consumed != value.size() || !std::isfinite(parsed) || parsed < 0.0) {
+    throw std::invalid_argument(option + " must be nonnegative");
+  }
+  return parsed;
+}
+
 } // namespace
 
 void print_usage(std::ostream& out) {
@@ -36,7 +50,9 @@ void print_usage(std::ostream& out) {
       << "             [--phase-timing] [--rccl-stage-b]\n"
       << "             [--rccl-sync-mode conservative|stream-ordered]\n"
       << "             [--min-halo N] [--max-halo N] [--halo-multiplier N]\n"
-      << "             [--samples-per-halo N]\n";
+      << "             [--samples-per-halo N]\n"
+      << "             [--record-iteration-times]\n"
+      << "             [--iteration-stall-threshold-us VALUE]\n";
 }
 
 CliOptions parse_cli_options(int argc, char** argv) {
@@ -89,6 +105,11 @@ CliOptions parse_cli_options(int argc, char** argv) {
       options.phase_timing = true;
     } else if (arg == "--rccl-stage-b") {
       options.rccl_stage_b = true;
+    } else if (arg == "--record-iteration-times") {
+      options.record_iteration_times = true;
+    } else if (arg == "--iteration-stall-threshold-us" && i + 1 < argc) {
+      options.iteration_stall_threshold_us =
+          parse_nonnegative_double(argv[++i], "--iteration-stall-threshold-us");
     } else {
       throw std::invalid_argument("unknown or incomplete argument: " + arg);
     }

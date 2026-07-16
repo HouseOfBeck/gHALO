@@ -4,13 +4,13 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/batch-job.sh REPO_ROOT SYSTEM BACKEND ACCOUNT PARTITION NODES RANKS RANKS_PER_NODE TARGET_SECONDS MIN_HALO MAX_HALO HALO_MULTIPLIER SAMPLES_PER_HALO VALIDATE PHASE_TIMING RCCL_STAGE_B RCCL_SYNC_MODE CATEGORY LABEL EXTRA_SRUN_ARGS SUBMIT_COMMAND BATCH_STDOUT BATCH_STDERR
+Usage: scripts/batch-job.sh REPO_ROOT SYSTEM BACKEND ACCOUNT PARTITION NODES RANKS RANKS_PER_NODE TARGET_SECONDS MIN_HALO MAX_HALO HALO_MULTIPLIER SAMPLES_PER_HALO RECORD_ITERATION_TIMES ITERATION_STALL_THRESHOLD_US VALIDATE PHASE_TIMING RCCL_STAGE_B RCCL_SYNC_MODE CATEGORY LABEL EXTRA_SRUN_ARGS SUBMIT_COMMAND BATCH_STDOUT BATCH_STDERR
 EOF
 }
 
 [[ -n "${SLURM_JOB_ID:-}" ]] ||
   { echo "gHALO batch-job error: SLURM_JOB_ID is not set; this script must run inside a Slurm job" >&2; exit 1; }
-[[ $# -eq 23 ]] || { usage >&2; exit 2; }
+[[ $# -eq 25 ]] || { usage >&2; exit 2; }
 
 repo_root="$1"
 system="$2"
@@ -25,16 +25,18 @@ min_halo="${10}"
 max_halo="${11}"
 halo_multiplier="${12}"
 samples_per_halo="${13}"
-validate="${14}"
-phase_timing="${15}"
-rccl_stage_b="${16}"
-rccl_sync_mode="${17}"
-category="${18}"
-label="${19}"
-extra_srun_args="${20}"
-submit_command="${21}"
-batch_stdout="${22}"
-batch_stderr="${23}"
+record_iteration_times="${14}"
+iteration_stall_threshold_us="${15}"
+validate="${16}"
+phase_timing="${17}"
+rccl_stage_b="${18}"
+rccl_sync_mode="${19}"
+category="${20}"
+label="${21}"
+extra_srun_args="${22}"
+submit_command="${23}"
+batch_stdout="${24}"
+batch_stderr="${25}"
 
 [[ "${repo_root}" = /* ]] ||
   { echo "gHALO batch-job error: REPO_ROOT must be an absolute path: ${repo_root}" >&2; exit 2; }
@@ -82,6 +84,8 @@ gHALO batch job
   max_halo: ${max_halo}
   halo_multiplier: ${halo_multiplier}
   samples_per_halo: ${samples_per_halo}
+  record_iteration_times: ${record_iteration_times}
+  iteration_stall_threshold_us: ${iteration_stall_threshold_us}
   category: ${category}
   rccl_sync_mode: ${rccl_sync_mode}
   allocated_nodes: ${SLURM_JOB_NODELIST:-}
@@ -108,6 +112,12 @@ if [[ "${validate}" == "1" ]]; then
 fi
 if [[ "${phase_timing}" == "1" ]]; then
   run_args+=(--phase-timing)
+fi
+if [[ "${record_iteration_times}" == "1" ]]; then
+  run_args+=(--record-iteration-times)
+fi
+if [[ -n "${iteration_stall_threshold_us}" ]]; then
+  run_args+=(--iteration-stall-threshold-us "${iteration_stall_threshold_us}")
 fi
 if [[ "${rccl_stage_b}" == "1" ]]; then
   run_args+=(--rccl-stage-b)

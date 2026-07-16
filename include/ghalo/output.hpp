@@ -17,4 +17,7 @@ void write_csv(const std::string& path,
 void write_json(const std::string& path,
                 const std::vector<BenchmarkResult>& results);
 
+void write_iteration_times_csv(const std::string& path,
+                               const std::vector<BenchmarkResult>& results);
+
 } // namespace ghalo

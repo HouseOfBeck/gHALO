@@ -11,6 +11,7 @@
 #endif
 
 #include <exception>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -45,6 +46,15 @@ std::unique_ptr<ghalo::Backend> make_backend(const ghalo::CliOptions& options) {
   throw std::invalid_argument("unknown backend: " + options.backend);
 }
 
+std::string iteration_times_path_for_csv(const std::string& csv_path) {
+  const std::filesystem::path path(csv_path);
+  const auto parent = path.parent_path();
+  if (parent.empty()) {
+    return "iteration-times.csv";
+  }
+  return (parent / "iteration-times.csv").string();
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -68,6 +78,9 @@ int main(int argc, char** argv) {
     config.max_halo = options.max_halo;
     config.halo_multiplier = options.halo_multiplier;
     config.samples_per_halo = options.samples_per_halo;
+    config.record_iteration_times = options.record_iteration_times;
+    config.iteration_stall_threshold_us =
+        options.iteration_stall_threshold_us;
 
     if (options.rccl_stage_b) {
       if (options.backend != "rccl") {
@@ -84,6 +97,10 @@ int main(int argc, char** argv) {
       ghalo::write_console(std::cout, results);
       ghalo::write_csv(options.csv_path, results);
       ghalo::write_json(options.json_path, results);
+      if (options.record_iteration_times) {
+        ghalo::write_iteration_times_csv(
+            iteration_times_path_for_csv(options.csv_path), results);
+      }
     }
   } catch (const std::exception& error) {
     std::cerr << "gHALO error on rank " << mpi.rank() << ": " << error.what()

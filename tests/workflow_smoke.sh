@@ -635,6 +635,8 @@ test_submit_dry_run() (
     --ranks-per-node 8 \
     --time 00:05:00 \
     --target-seconds 0.1 \
+    --record-iteration-times \
+    --iteration-stall-threshold-us 1000 \
     --label "dry run label" \
     --dry-run >"${output}"
 
@@ -643,6 +645,8 @@ test_submit_dry_run() (
   assert_contains "scripts/batch-job.sh ${ROOT}" \
     "${output}" "repo root follows batch-job path"
   assert_contains 'dry\ run\ label' "${output}" "label is shell escaped"
+  assert_contains ' 1 1000 0 0 0 ' "${output}" \
+    "dry-run forwards iteration timing batch arguments"
 
   GHALO_SYSTEM_NAME=frontier "${ROOT}/scripts/submit.sh" \
     --backend rccl \
@@ -680,7 +684,7 @@ test_submit_rank_layout_failure() (
 test_batch_job_requires_slurm() (
   local output="${GHALO_TEST_TMPDIR}/ghalo-batch-job-no-slurm.txt"
   if env -u SLURM_JOB_ID "${ROOT}/scripts/batch-job.sh" \
-    "${ROOT}" frontier mpi TEST123 batch 1 4 4 0.1 2 1024 2 1 0 0 0 "" "" smoke "" submit out err \
+    "${ROOT}" frontier mpi TEST123 batch 1 4 4 0.1 2 1024 2 1 0 "" 0 0 0 "" "" smoke "" submit out err \
     >"${output}" 2>&1; then
     printf 'expected batch-job without SLURM_JOB_ID to fail\n' >&2
     exit 1
@@ -723,6 +727,8 @@ EOF
     1024 \
     2 \
     1 \
+    1 \
+    1000 \
     0 \
     0 \
     0 \
@@ -743,6 +749,8 @@ EOF
     "batch job invoked run.sh from explicit root"
   assert_contains "--min-halo 2 --max-halo 1024 --halo-multiplier 2 --samples-per-halo 1" \
     "${marker}" "batch job forwards halo range"
+  assert_contains "--record-iteration-times --iteration-stall-threshold-us 1000" \
+    "${marker}" "batch job forwards iteration timing diagnostics"
   assert_not_contains "${spool_dir}/scripts/run.sh" "${output}" \
     "batch job did not derive run.sh from spool path"
   assert_not_contains "${spool_dir}/scripts/run.sh" "${marker}" \
@@ -818,6 +826,10 @@ test_validation_suite_verifies_results() (
   "${suite}" --help >"${output}"
   assert_contains 'Usage: scripts/run_validation_suite.sh' \
     "${output}" "validation suite usage"
+  assert_contains '--record-iteration-times' "${output}" \
+    "validation suite documents iteration timing"
+  assert_contains '--iteration-stall-threshold-us' "${output}" \
+    "validation suite documents iteration stall threshold"
   assert_contains 'MPI-HIP 1 node' "${output}" \
     "validation suite documents MPI-HIP 1-node case"
   assert_contains 'RCCL stream-ordered 2 nodes' "${output}" \
@@ -832,8 +844,12 @@ test_validation_suite_verifies_results() (
     "validation suite checks detected topology"
   assert_contains 'requested_nodes' "${suite}" \
     "validation suite checks requested node metadata"
+  assert_contains 'iteration_records_emitted' "${suite}" \
+    "validation suite checks iteration timing metadata"
   assert_contains 'capture_result_environment' "${suite}" \
     "validation suite captures environment best effort"
+  assert_contains 'command+=(--record-iteration-times)' "${suite}" \
+    "validation suite forwards iteration timing"
   assert_contains 'WARNING: environment capture failed' "${suite}" \
     "validation suite warns on environment capture failure"
   assert_contains "require_metadata_key \"\${result_metadata}\" rocm_version" \

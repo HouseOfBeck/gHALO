@@ -138,6 +138,28 @@ double MPIBackend::max_time(double local_seconds) {
   return global_seconds;
 }
 
+std::vector<IterationTimingReduction> MPIBackend::max_time_ranks(
+    const std::vector<double>& local_seconds) {
+  struct TimeRank {
+    double seconds;
+    int rank;
+  };
+  std::vector<TimeRank> local;
+  std::vector<TimeRank> global(local_seconds.size());
+  local.reserve(local_seconds.size());
+  for (const double seconds : local_seconds) {
+    local.push_back({seconds, topology_.world_rank});
+  }
+  MPI_Allreduce(local.data(), global.data(), static_cast<int>(local.size()),
+                MPI_DOUBLE_INT, MPI_MAXLOC, cart_comm_);
+  std::vector<IterationTimingReduction> reductions;
+  reductions.reserve(global.size());
+  for (const auto& entry : global) {
+    reductions.push_back({entry.seconds, entry.rank});
+  }
+  return reductions;
+}
+
 void MPIBackend::initialize_topology() {
   MPI_Comm_rank(MPI_COMM_WORLD, &topology_.world_rank);
   MPI_Comm_size(MPI_COMM_WORLD, &topology_.world_size);

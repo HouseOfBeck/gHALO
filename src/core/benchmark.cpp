@@ -5,9 +5,19 @@
 #include <cstddef>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace ghalo {
 namespace {
+
+struct TimedExchangeResult {
+  double local_total_seconds{};
+  std::vector<double> local_iteration_seconds;
+  std::size_t total_observed{};
+  std::size_t records_emitted{};
+  std::size_t stall_count{};
+  std::vector<IterationTimingRecord> records;
+};
 
 double time_exchanges(Backend& backend, int iterations) {
   const double start = backend.now();
@@ -15,6 +25,57 @@ double time_exchanges(Backend& backend, int iterations) {
     backend.exchange();
   }
   return backend.now() - start;
+}
+
+TimedExchangeResult time_exchanges_with_iteration_records(
+    Backend& backend, int iterations, std::size_t halo_words,
+    std::size_t sample_index, double threshold_us) {
+  TimedExchangeResult result;
+  result.total_observed = static_cast<std::size_t>(iterations);
+  result.local_iteration_seconds.reserve(static_cast<std::size_t>(iterations));
+  result.records.reserve(static_cast<std::size_t>(iterations));
+
+  const bool emit_all = threshold_us <= 0.0;
+  const double threshold_seconds = threshold_us * 1.0e-6;
+  const auto backend_name = backend.name();
+  const auto metadata = backend.metadata();
+  const auto topology = backend.topology();
+
+  for (int i = 0; i < iterations; ++i) {
+    const double start = backend.now();
+    backend.exchange();
+    const double local_seconds = backend.now() - start;
+    result.local_total_seconds += local_seconds;
+    result.local_iteration_seconds.push_back(local_seconds);
+  }
+
+  const auto reductions = backend.max_time_ranks(result.local_iteration_seconds);
+  if (reductions.size() != result.local_iteration_seconds.size()) {
+    throw std::runtime_error(
+        "backend returned mismatched iteration timing reductions");
+  }
+
+  for (std::size_t i = 0; i < reductions.size(); ++i) {
+    const auto& reduced = reductions[i];
+    const bool is_stall =
+        !emit_all && reduced.seconds >= threshold_seconds;
+    if (is_stall) {
+      ++result.stall_count;
+    }
+    if (emit_all || is_stall) {
+      result.records.push_back(
+          IterationTimingRecord{halo_words,
+                                sample_index,
+                                i + 1,
+                                reduced.seconds,
+                                reduced.rank,
+                                backend_name,
+                                metadata.rccl_sync_mode,
+                                topology.world_size});
+      ++result.records_emitted;
+    }
+  }
+  return result;
 }
 
 } // namespace
@@ -68,6 +129,10 @@ std::vector<BenchmarkResult> run_benchmark(Backend& backend,
   if (config.samples_per_halo == 0) {
     throw std::invalid_argument("samples_per_halo must be positive");
   }
+  if (config.iteration_stall_threshold_us < 0.0) {
+    throw std::invalid_argument(
+        "iteration_stall_threshold_us must be nonnegative");
+  }
 
   const std::vector<std::size_t> halo_lengths =
       config.halo_lengths.empty()
@@ -106,7 +171,16 @@ std::vector<BenchmarkResult> run_benchmark(Backend& backend,
       }
 
       backend.barrier();
-      const double measured_local = time_exchanges(backend, iterations);
+      TimedExchangeResult iteration_timing;
+      double measured_local = 0.0;
+      if (config.record_iteration_times) {
+        iteration_timing = time_exchanges_with_iteration_records(
+            backend, iterations, halo_words, sample,
+            config.iteration_stall_threshold_us);
+        measured_local = iteration_timing.local_total_seconds;
+      } else {
+        measured_local = time_exchanges(backend, iterations);
+      }
       const double measured_max = backend.max_time(measured_local);
 
       BenchmarkResult result;
@@ -120,6 +194,13 @@ std::vector<BenchmarkResult> run_benchmark(Backend& backend,
       result.iterations = iterations;
       result.sample_index = sample;
       result.sample_count = config.samples_per_halo;
+      result.iteration_timing_enabled = config.record_iteration_times;
+      result.iteration_stall_threshold_us =
+          config.iteration_stall_threshold_us;
+      result.iteration_total_observed = iteration_timing.total_observed;
+      result.iteration_records_emitted = iteration_timing.records_emitted;
+      result.iteration_stall_count = iteration_timing.stall_count;
+      result.iteration_times = std::move(iteration_timing.records);
       result.max_total_seconds = measured_max;
       result.max_average_seconds =
           measured_max / static_cast<double>(iterations);

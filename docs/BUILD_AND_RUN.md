@@ -178,6 +178,8 @@ Supported options:
 --max-halo <N>
 --halo-multiplier <N>
 --samples-per-halo <N>
+--record-iteration-times
+--iteration-stall-threshold-us <microseconds>
 --validate
 --phase-timing
 --rccl-stage-b
@@ -221,6 +223,7 @@ environment.txt
 exit-status.txt
 ghalo.csv
 ghalo.json
+iteration-times.csv
 git.txt
 hostname.txt
 modules.txt
@@ -235,6 +238,8 @@ system-resolution.txt
 The current gHALO CLI supports `--csv` and `--json`, so the workflow writes
 structured output directly into the result directory. The script launches the
 benchmark without pipelines and returns the benchmark exit status.
+`iteration-times.csv` is written only when per-iteration timing diagnostics are
+enabled.
 
 The default halo sweep remains `2, 4, ..., 1024`. Short validation runs can keep
 the default sweep while reducing timing duration:
@@ -313,6 +318,91 @@ GHALO_SYSTEM_NAME=borg scripts/run.sh \
   --validate \
   --category repeatability \
   --label stream-ordered-halo64-50samples
+```
+
+## Iteration Timing Diagnostics
+
+Use `--record-iteration-times` to capture per-iteration wall-clock timing for
+measured benchmark iterations. This mode is intended to diagnose rare slow
+samples while keeping MPI, HIP, RCCL, streams, communicators, and the selected
+backend alive for the duration of the executable.
+
+When enabled, gHALO records one diagnostic observation per measured iteration
+after warmup and calibration. For each observation, it records the maximum
+iteration duration across ranks and the rank that observed that maximum when
+the backend can provide it. The diagnostic records are written to
+`iteration-times.csv` in the result directory, while the normal `ghalo.csv` and
+`ghalo.json` summary fields retain their usual meaning.
+
+`--iteration-stall-threshold-us <VALUE>` filters the records written to
+`iteration-times.csv`. A missing value or `0` emits every measured iteration.
+Positive values emit only iterations whose global maximum duration is at least
+the threshold. Summary counts in JSON and `result-metadata.txt` record total
+observed iterations, emitted records, stall count, and threshold.
+
+This mode intentionally adds diagnostic overhead after each timed sample to
+identify the global maximum and rank for the sample's measured iterations. It
+does not add synchronization or timed collectives inside the exchange loop, and
+it is opt-in so ordinary benchmark runs are unaffected.
+
+Borg RCCL conservative example for halo 128, 100 persistent samples, and a
+1000 us stall threshold:
+
+```sh
+GHALO_SYSTEM_NAME=borg scripts/run.sh \
+  --backend rccl \
+  --rccl-sync-mode conservative \
+  --nodes 1 \
+  --ranks 8 \
+  --ranks-per-node 8 \
+  --min-halo 128 \
+  --max-halo 128 \
+  --samples-per-halo 100 \
+  --target-seconds 0.1 \
+  --validate \
+  --record-iteration-times \
+  --iteration-stall-threshold-us 1000 \
+  --category repeatability \
+  --label conservative-halo128-100samples-iter
+```
+
+MPI-HIP control run using the same placement and halo size:
+
+```sh
+GHALO_SYSTEM_NAME=borg scripts/run.sh \
+  --backend mpi-hip \
+  --nodes 1 \
+  --ranks 8 \
+  --ranks-per-node 8 \
+  --min-halo 128 \
+  --max-halo 128 \
+  --samples-per-halo 100 \
+  --target-seconds 0.1 \
+  --validate \
+  --record-iteration-times \
+  --iteration-stall-threshold-us 1000 \
+  --category repeatability \
+  --label mpi-hip-halo128-100samples-iter
+```
+
+Borg RCCL stream-ordered example for halo 64 with 50 persistent samples:
+
+```sh
+GHALO_SYSTEM_NAME=borg scripts/run.sh \
+  --backend rccl \
+  --rccl-sync-mode stream-ordered \
+  --nodes 1 \
+  --ranks 8 \
+  --ranks-per-node 8 \
+  --min-halo 64 \
+  --max-halo 64 \
+  --samples-per-halo 50 \
+  --target-seconds 0.1 \
+  --validate \
+  --record-iteration-times \
+  --iteration-stall-threshold-us 1000 \
+  --category repeatability \
+  --label stream-ordered-halo64-50samples-iter
 ```
 
 For RCCL full correctness validation:
@@ -456,6 +546,9 @@ Supported submission options include:
 --min-halo <N>
 --max-halo <N>
 --halo-multiplier <N>
+--samples-per-halo <N>
+--record-iteration-times
+--iteration-stall-threshold-us <microseconds>
 --validate
 --phase-timing
 --rccl-stage-b

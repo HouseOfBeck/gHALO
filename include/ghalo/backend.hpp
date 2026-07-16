@@ -77,6 +77,11 @@ struct PhaseTimingResult {
   double total_minus_sum_of_phase_maxima_seconds{};
 };
 
+struct IterationTimingReduction {
+  double seconds{};
+  int rank{};
+};
+
 inline double phase_timing_sum(const PhaseTimingResult& phase) {
   const bool has_generic_fields =
       phase.north_south_communication_seconds != 0.0 ||
@@ -128,6 +133,15 @@ public:
   virtual void barrier() = 0;
   virtual double now() const = 0;
   virtual double max_time(double local_seconds) = 0;
+  virtual std::vector<IterationTimingReduction> max_time_ranks(
+      const std::vector<double>& local_seconds) {
+    std::vector<IterationTimingReduction> reductions;
+    reductions.reserve(local_seconds.size());
+    for (const double seconds : local_seconds) {
+      reductions.push_back({max_time(seconds), rank()});
+    }
+    return reductions;
+  }
   virtual void run_development_validation(const std::vector<std::size_t>&) {
     throw std::runtime_error(
         "development validation is not supported by backend " + name());

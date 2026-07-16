@@ -23,6 +23,10 @@ Options:
   --max-halo N               Maximum halo length. Default: 1024.
   --halo-multiplier N        Halo length multiplier. Default: 2.
   --samples-per-halo N       Independent timed samples per halo. Default: 1.
+  --record-iteration-times   Write per-iteration max-rank timing diagnostics.
+  --iteration-stall-threshold-us VALUE
+                             Emit iteration timing records at or above VALUE us.
+                             Default/zero emits every measured iteration.
   --validate                 Pass --validate to gHALO.
   --phase-timing             Pass --phase-timing to gHALO.
   --rccl-stage-b             Run RCCL north/south Stage B validation only.
@@ -45,6 +49,8 @@ min_halo="2"
 max_halo="1024"
 halo_multiplier="2"
 samples_per_halo="1"
+record_iteration_times=false
+iteration_stall_threshold_us=""
 validate=false
 phase_timing=false
 rccl_stage_b=false
@@ -103,6 +109,15 @@ while [[ $# -gt 0 ]]; do
     --samples-per-halo)
       [[ $# -ge 2 ]] || ghalo_die "--samples-per-halo requires a value"
       samples_per_halo="$2"
+      shift 2
+      ;;
+    --record-iteration-times)
+      record_iteration_times=true
+      shift
+      ;;
+    --iteration-stall-threshold-us)
+      [[ $# -ge 2 ]] || ghalo_die "--iteration-stall-threshold-us requires a value"
+      iteration_stall_threshold_us="$2"
       shift 2
       ;;
     --validate)
@@ -174,6 +189,10 @@ done
   ghalo_die "--halo-multiplier must be greater than 1"
 [[ "${max_halo}" -ge "${min_halo}" ]] ||
   ghalo_die "--max-halo must be greater than or equal to --min-halo"
+if [[ -n "${iteration_stall_threshold_us}" ]]; then
+  [[ "${iteration_stall_threshold_us}" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]] ||
+    ghalo_die "--iteration-stall-threshold-us must be nonnegative"
+fi
 
 system="$(ghalo_resolve_system "${requested_system}")"
 ghalo_validate_system_name "${system}"
@@ -229,6 +248,12 @@ fi
 if [[ -n "${rccl_sync_mode}" ]]; then
   ghalo_args+=(--rccl-sync-mode "${rccl_sync_mode}")
 fi
+if [[ "${record_iteration_times}" == true ]]; then
+  ghalo_args+=(--record-iteration-times)
+fi
+if [[ -n "${iteration_stall_threshold_us}" ]]; then
+  ghalo_args+=(--iteration-stall-threshold-us "${iteration_stall_threshold_us}")
+fi
 
 launch_command=()
 while IFS= read -r launch_arg; do
@@ -261,6 +286,8 @@ ghalo_write_system_resolution "${result_dir}/system-resolution.txt" \
   printf 'max_halo=%s\n' "${max_halo}"
   printf 'halo_multiplier=%s\n' "${halo_multiplier}"
   printf 'samples_per_halo=%s\n' "${samples_per_halo}"
+  printf 'iteration_timing_enabled=%s\n' "${record_iteration_times}"
+  printf 'iteration_stall_threshold_us=%s\n' "${iteration_stall_threshold_us:-0}"
   printf 'requested_nodes=%s\n' "${nodes}"
   printf 'requested_ranks=%s\n' "${ranks}"
   printf 'requested_ranks_per_node=%s\n' "${ranks_per_node:-}"
@@ -309,4 +336,36 @@ set -e
 echo "${status}" >"${result_dir}/exit-status.txt"
 
 echo "gHALO exit status: ${status}"
+{
+  if [[ "${record_iteration_times}" == true && -s "${result_dir}/iteration-times.csv" ]]; then
+    iteration_records_emitted="$(awk 'END { print (NR > 0 ? NR - 1 : 0) }' \
+      "${result_dir}/iteration-times.csv")"
+    iteration_total_observed="$(awk -F, '
+      NR == 1 {
+        for (i = 1; i <= NF; ++i) {
+          if ($i == "iterations") {
+            iterations_column = i
+          }
+        }
+        next
+      }
+      iterations_column { total += $iterations_column }
+      END { print total + 0 }
+    ' "${result_dir}/ghalo.csv")"
+    if [[ -n "${iteration_stall_threshold_us}" &&
+          "${iteration_stall_threshold_us}" != "0" &&
+          "${iteration_stall_threshold_us}" != "0.0" ]]; then
+      iteration_stall_count="${iteration_records_emitted}"
+    else
+      iteration_stall_count="0"
+    fi
+  else
+    iteration_total_observed="0"
+    iteration_records_emitted="0"
+    iteration_stall_count="0"
+  fi
+  printf 'iteration_total_observed=%s\n' "${iteration_total_observed}"
+  printf 'iteration_records_emitted=%s\n' "${iteration_records_emitted}"
+  printf 'iteration_stall_count=%s\n' "${iteration_stall_count}"
+} >>"${result_dir}/result-metadata.txt"
 exit "${status}"
