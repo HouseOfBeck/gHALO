@@ -10,16 +10,13 @@
 #SBATCH -e batch-logs/borg-rccl-version-matrix-%j.err
 
 # shellcheck source-path=SCRIPTDIR
-
 set -euo pipefail
 
-cd "${SLURM_SUBMIT_DIR}" || exit
+ROOT="${SLURM_SUBMIT_DIR:-$PWD}"
+cd "$ROOT"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# shellcheck source=../scripts/common.sh
-source "${SCRIPT_DIR}/scripts/common.sh"
-# shellcheck source=../scripts/systems/borg.sh
-source "${SCRIPT_DIR}/scripts/systems/borg.sh"
+source "$ROOT/scripts/common.sh"
+source "$ROOT/scripts/systems/borg.sh"
 
 realpath_portable() {
   local path="$1"
@@ -143,7 +140,7 @@ run_version() {
   local version="$1"
   local expected_code="$2"
   local label="borg-rccl-version-rocm-${version}"
-  local build_dir="${SCRIPT_DIR}/builds/borg/rccl-rocm-${version}"
+  local build_dir="${ROOT}/builds/borg/rccl-rocm-${version}"
   local binary="${build_dir}/ghalo"
   local log_dir="test-logs/borg-rccl-version-matrix-${SLURM_JOB_ID:-manual}"
 
@@ -211,9 +208,48 @@ if [[ -f scripts/setenv.borg ]]; then
   source scripts/setenv.borg
 fi
 
+module unload craype-accel-amd-gfx90a 2>/dev/null || true
+export MPICH_GPU_SUPPORT_ENABLED=0
+
 run_version 6.4.2 22203
+echo "Runtime dependencies for ${binary}:"
+ldd "${binary}"
+
+if ldd "${binary}" | grep -q 'not found'; then
+	    echo "ERROR: unresolved runtime dependencies for ${binary}" >&2
+	        exit 1
+fi
+
+if readelf -d "${binary}" | grep -q 'libmpi_gtl_hsa'; then
+    echo "ERROR: ${binary} still links libmpi_gtl_hsa" >&2
+    exit 1
+fi
 run_version 7.0.2 22606
+echo "Runtime dependencies for ${binary}:"
+ldd "${binary}"
+
+if ldd "${binary}" | grep -q 'not found'; then
+	    echo "ERROR: unresolved runtime dependencies for ${binary}" >&2
+    exit 1
+fi
+
+if readelf -d "${binary}" | grep -q 'libmpi_gtl_hsa'; then
+    echo "ERROR: ${binary} still links libmpi_gtl_hsa" >&2
+    exit 1
+fi
 run_version 7.2.0 22707
+echo "Runtime dependencies for ${binary}:"
+ldd "${binary}"
+
+if ldd "${binary}" | grep -q 'not found'; then
+    echo "ERROR: unresolved runtime dependencies for ${binary}" >&2
+    exit 1
+fi
+
+if readelf -d "${binary}" | grep -q 'libmpi_gtl_hsa'; then
+    echo "ERROR: ${binary} still links libmpi_gtl_hsa" >&2
+    exit 1
+fi
 
 utc_end="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 cat <<EOF
