@@ -556,6 +556,78 @@ The analyzer classifies each stalled iteration as `collective-wide`,
 distinguish a collective-wide slow mode from a bad rank, node, GPU, Cartesian
 row, or Cartesian column.
 
+### Borg RCCL ROCm Stack Matrix
+
+`slurm/borg_rccl_version_matrix.sbatch` runs a controlled Borg comparison of
+three ROCm/RCCL stacks in one allocation:
+
+```text
+ROCm 6.4.2  RCCL/NCCL_VERSION_CODE 22203
+ROCm 7.0.2  RCCL/NCCL_VERSION_CODE 22606
+ROCm 7.2.0  RCCL/NCCL_VERSION_CODE 22707
+```
+
+This is a ROCm/RCCL stack comparison, not a pure RCCL-only test. HIP runtime,
+RCCL, and other ROCm components change together. All three runs use
+`rccl-net-plugin/1.0` with the AWS OFI NCCL/RCCL plugin release available from
+Borg's version-specific plugin directory.
+
+Fixed controls:
+
+- same gHALO commit;
+- same Borg Slurm allocation and node list;
+- same rank count and rank mapping: 8 nodes, 64 ranks, 8 ranks per node;
+- same RCCL conservative synchronization mode;
+- same OFI plugin module family, `rccl-net-plugin/1.0`;
+- matching version-specific ROCm/RCCL/plugin binaries;
+- same benchmark parameters: halo 128, 200 samples, target 0.1 seconds,
+  validation, phase timing, iteration timing, stalled-rank timing, and 1000 us
+  stall threshold.
+
+Submit from the repository root:
+
+```sh
+JOBID=$(sbatch slurm/borg_rccl_version_matrix.sbatch | awk '{print $4}')
+echo "${JOBID}"
+```
+
+The script builds each stack in an isolated directory and does not overwrite
+the normal Borg RCCL build:
+
+```text
+builds/borg/rccl-rocm-6.4.2
+builds/borg/rccl-rocm-7.0.2
+builds/borg/rccl-rocm-7.2.0
+```
+
+Before each run, the script validates the loaded ROCm module, `ROCM_PATH`,
+`RCCL_ROOT`, RCCL version code, OFI plugin root, `librccl.so`,
+`libamdhip64.so`, and `libnccl-net.so`. It also checks the built executable
+with `ldd` to ensure `librccl` and `libamdhip64` resolve from the intended
+ROCm version.
+
+Analyze the completed matrix with:
+
+```sh
+python3 tools/compare_rccl_versions.py \
+  --system borg \
+  --category repeatability \
+  --threshold-us 1000 \
+  --output-dir analysis/borg-rccl-version-comparison
+```
+
+The comparison writes:
+
+```text
+rccl-version-comparison.md
+rccl-version-comparison.csv
+rccl-version-comparison.json
+```
+
+Zero observed stalls in one matrix run should be treated as an observation for
+that sample count and placement, not proof that the stack is immune to rare
+stalls.
+
 ### Borg Iteration Stall Diagnostic
 
 The focused Borg stall diagnostic batch script compares RCCL conservative,

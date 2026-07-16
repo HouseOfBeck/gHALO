@@ -972,6 +972,32 @@ test_stalled_rank_sbatch_scripts() (
     "Frontier stalled-rank diagnostic uses batch partition"
 )
 
+test_borg_rccl_version_matrix_sbatch() (
+  local script="${ROOT}/slurm/borg_rccl_version_matrix.sbatch"
+  assert_contains '#SBATCH -p testing' "${script}" \
+    "Borg RCCL version matrix uses testing partition"
+  assert_contains '#SBATCH --reservation=jlbeck.testing' "${script}" \
+    "Borg RCCL version matrix uses requested reservation"
+  assert_contains '#SBATCH -N 8' "${script}" \
+    "Borg RCCL version matrix uses 8 nodes"
+  assert_contains 'run_version 6.4.2 22203' "${script}" \
+    "Borg RCCL version matrix includes ROCm 6.4.2"
+  assert_contains 'run_version 7.0.2 22606' "${script}" \
+    "Borg RCCL version matrix includes ROCm 7.0.2"
+  assert_contains 'run_version 7.2.0 22707' "${script}" \
+    "Borg RCCL version matrix includes ROCm 7.2.0"
+  assert_contains 'GHALO_BUILD_DIR_OVERRIDE' "${script}" \
+    "Borg RCCL version matrix uses isolated build override"
+  assert_contains "builds/borg/rccl-rocm-\${version}" "${script}" \
+    "Borg RCCL version matrix uses versioned build directories"
+  assert_contains '--record-stalled-rank-times' "${script}" \
+    "Borg RCCL version matrix records stalled-rank diagnostics"
+  assert_contains 'samples-per-halo 200' "${script}" \
+    "Borg RCCL version matrix uses 200 samples"
+  assert_contains 'ldd did not resolve librccl from ROCm' "${script}" \
+    "Borg RCCL version matrix verifies librccl linkage"
+)
+
 test_borg_build_alias_resolution
 test_native_default_for_generic_system
 test_missing_aliased_binary_error
@@ -999,3 +1025,4 @@ test_migrate_results_dry_run
 test_borg_iteration_stall_sbatch
 test_iteration_phase_sbatch_scripts
 test_stalled_rank_sbatch_scripts
+test_borg_rccl_version_matrix_sbatch

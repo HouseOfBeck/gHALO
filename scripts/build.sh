@@ -16,6 +16,7 @@ Options:
   --system NAME              System configuration name. GHALO_SYSTEM_NAME wins if set.
   --backend mpi|mpi-hip|rccl Backend build to configure.
   --build-type TYPE          CMake build type: Release or Debug. Default: Release.
+  --build-dir PATH           Override the build directory for this invocation.
   --clean                    Remove the selected build directory before configuring.
   --jobs N                   Parallel build jobs passed to cmake --build.
   -h, --help                 Show this help.
@@ -26,6 +27,7 @@ root="$(ghalo_repo_root)"
 requested_system=""
 backend=""
 build_type="Release"
+build_dir_override=""
 clean=false
 jobs=""
 
@@ -44,6 +46,11 @@ while [[ $# -gt 0 ]]; do
     --build-type)
       [[ $# -ge 2 ]] || ghalo_die "--build-type requires a value"
       build_type="$2"
+      shift 2
+      ;;
+    --build-dir)
+      [[ $# -ge 2 ]] || ghalo_die "--build-dir requires a value"
+      build_dir_override="$2"
       shift 2
       ;;
     --clean)
@@ -79,6 +86,9 @@ system="$(ghalo_resolve_system "${requested_system}")"
 ghalo_validate_system_name "${system}"
 ghalo_load_system_config "${root}" "${system}"
 
+if [[ -n "${build_dir_override}" ]]; then
+  export GHALO_BUILD_DIR_OVERRIDE="${build_dir_override}"
+fi
 build_dir="$(ghalo_build_dir "${root}" "${system}" "${backend}")"
 info_dir="${build_dir}/build-info"
 

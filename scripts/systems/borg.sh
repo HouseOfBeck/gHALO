@@ -51,6 +51,8 @@ ghalo_borg_unload_rocm() {
   module unload rocm >/dev/null 2>&1 || true
   module unload rocm/6.2.4 >/dev/null 2>&1 || true
   module unload rocm/6.4.2 >/dev/null 2>&1 || true
+  module unload rocm/7.0.2 >/dev/null 2>&1 || true
+  module unload rocm/7.2.0 >/dev/null 2>&1 || true
 }
 
 ghalo_borg_rccl_header_exists() {
@@ -99,7 +101,7 @@ ghalo_borg_path_matches_rocm_version() {
 }
 
 ghalo_borg_verify_rccl_rocm_consistency() {
-  local version="6.4.2"
+  local version="${1:-6.4.2}"
   local expected_root="/opt/rocm-${version}"
   local hip_compiler
   local rccl_library
@@ -140,15 +142,16 @@ ghalo_borg_verify_rccl_rocm_consistency() {
 }
 
 ghalo_borg_load_rccl_gpu() {
+  local version="${GHALO_BORG_RCCL_ROCM_VERSION:-${GHALO_ROCM_VERSION:-6.4.2}}"
   ghalo_borg_require_modules
   module load craype-accel-amd-gfx90a ||
     ghalo_die "failed to load craype-accel-amd-gfx90a on Borg"
   ghalo_borg_unload_rocm
-  module load rocm/6.4.2 ||
-    ghalo_die "failed to load required Borg ROCm module rocm/6.4.2"
+  module load "rocm/${version}" ||
+    ghalo_die "failed to load required Borg ROCm module rocm/${version}"
   module load rccl-net-plugin/1.0 ||
     ghalo_die "failed to load required Borg RCCL network plugin rccl-net-plugin/1.0"
-  ghalo_borg_verify_rccl_rocm_consistency
+  ghalo_borg_verify_rccl_rocm_consistency "${version}"
 }
 
 ghalo_borg_rccl_availability_hint() {

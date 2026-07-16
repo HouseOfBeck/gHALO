@@ -429,6 +429,36 @@ sbatch slurm/frontier_stalled_rank_diagnostic.sbatch
 Use the rank, node, GPU, Cartesian row, and Cartesian column frequency tables
 to distinguish a single bad participant from a collective-wide slow sample.
 
+## RCCL Version Matrix Comparison
+
+`tools/compare_rccl_versions.py` compares the controlled Borg ROCm/RCCL stack
+matrix produced by `slurm/borg_rccl_version_matrix.sbatch`:
+
+```sh
+python3 tools/compare_rccl_versions.py \
+  --system borg \
+  --category repeatability \
+  --threshold-us 1000 \
+  --output-dir analysis/borg-rccl-version-comparison
+```
+
+The tool expects exactly these stacks:
+
+```text
+ROCm 6.4.2  RCCL/NCCL_VERSION_CODE 22203
+ROCm 7.0.2  RCCL/NCCL_VERSION_CODE 22606
+ROCm 7.2.0  RCCL/NCCL_VERSION_CODE 22707
+```
+
+It reports per-version stall counts, stall percentages, affected samples,
+event lengths, dominant phase counts, rank-event classifications, fast-path
+median sample latency, validation status, HIP runtime, RCCL version, and plugin
+path. It also validates that each result belongs to the expected ROCm version
+and RCCL conservative mode.
+
+This is a ROCm/RCCL stack comparison, not a pure RCCL-only test. Treat zero
+observed stalls as one observation for the recorded sample count and placement.
+
 ## Phase Timing
 
 When phase timing is present, use:

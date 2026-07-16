@@ -172,6 +172,10 @@ ghalo_build_dir() {
   local root="$1"
   local system="$2"
   local backend="$3"
+  if [[ -n "${GHALO_BUILD_DIR_OVERRIDE:-}" ]]; then
+    printf '%s\n' "${GHALO_BUILD_DIR_OVERRIDE}"
+    return
+  fi
   printf '%s/builds/%s/%s\n' "${root}" "${system}" "${backend}"
 }
 
@@ -251,6 +255,11 @@ ghalo_capture_environment() {
       GHALO_SUBMIT_COMMAND \
       GHALO_BATCH_STDOUT \
       GHALO_BATCH_STDERR \
+      GHALO_BUILD_DIR_OVERRIDE \
+      GHALO_REQUESTED_ROCM_VERSION \
+      GHALO_RCCL_VERSION_CODE_EXPECTED \
+      GHALO_RCCL_VERSION_CODE_OBSERVED \
+      GHALO_RCCL_NET_PLUGIN_MODULE \
       GHALO_SUBMISSION_SYSTEM \
       GHALO_SUBMISSION_ACCOUNT \
       GHALO_SUBMISSION_PARTITION \
@@ -264,7 +273,10 @@ ghalo_capture_environment() {
       GHALO_LOADED_ROCM_MODULE \
       GHALO_RESOLVED_HIP_COMPILER \
       GHALO_RESOLVED_HIP_LIBRARY \
+      GHALO_RESOLVED_HIP_LIBRARY_REALPATH \
       GHALO_RESOLVED_RCCL_LIBRARY \
+      GHALO_RESOLVED_RCCL_LIBRARY_REALPATH \
+      GHALO_RESOLVED_NCCL_NET_LIBRARY_REALPATH \
       HIP_PATH \
       ROCR_VISIBLE_DEVICES \
       HIP_VISIBLE_DEVICES \
