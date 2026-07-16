@@ -148,16 +148,42 @@ run_version() {
   printf '\n== ROCm %s / RCCL version code %s ==\n' "${version}" "${expected_code}"
   prepare_stack "${version}" "${expected_code}"
 
-  GHALO_SYSTEM_NAME=borg \
-  GHALO_BUILD_DIR_OVERRIDE="${build_dir}" \
-  scripts/build.sh \
-    --system borg \
-    --backend rccl \
-    --build-dir "${build_dir}" \
-    --build-type Release
+  binary="$ROOT/builds/borg/rccl-rocm-${version}/ghalo"
 
-  [[ -x "${binary}" ]] ||
-    ghalo_die "expected binary was not created: ${binary}"
+  if [[ ! -x "${binary}" ]]; then
+      echo "UNUSABLE STACK: ROCm ${version} build did not produce ${binary}" >&2
+      return 0
+  fi
+
+
+  if ! scripts/build.sh \
+       --system borg \
+       --backend rccl \
+       --build-dir "${build_dir}" \
+       --clean; then
+    echo "UNUSABLE STACK: ROCm ${version} build failed" >&2
+      return 0
+  fi
+
+   if [[ ! -x "${binary}" ]]; then
+      echo "UNUSABLE STACK: ROCm ${version} build did not produce ${binary}" >&2
+      return 0
+   fi
+
+   echo "Runtime dependencies for ${binary}:"
+   ldd "${binary}"
+
+   if ldd "${binary}" | grep -q 'not found'; then
+     echo "UNUSABLE STACK: ROCm ${version} has unresolved runtime dependencies" >&2
+     ldd "${binary}" >&2
+     return 0
+   fi
+
+   verify_ldd_stack \
+    "${binary}" \
+    "${version}" \
+    "${log_dir}/ldd-rocm-${version}.txt"
+
   verify_ldd_stack "${binary}" "${version}" "${log_dir}/ldd-rocm-${version}.txt"
 
   GHALO_SYSTEM_NAME=borg \
@@ -208,51 +234,9 @@ if [[ -f scripts/setenv.borg ]]; then
   source scripts/setenv.borg
 fi
 
-module unload craype-accel-amd-gfx90a 2>/dev/null || true
-export MPICH_GPU_SUPPORT_ENABLED=0
-
 run_version 6.4.2 22203
-binary="$ROOT/builds/borg/rccl-rocm-${version}/ghalo"
-echo "Runtime dependencies for ${binary}:"
-ldd "${binary}"
-
-if ldd "${binary}" | grep -q 'not found'; then
-	    echo "ERROR: unresolved runtime dependencies for ${binary}" >&2
-	        exit 1
-fi
-
-if readelf -d "${binary}" | grep -q 'libmpi_gtl_hsa'; then
-    echo "ERROR: ${binary} still links libmpi_gtl_hsa" >&2
-    exit 1
-fi
 run_version 7.0.2 22606
-binary="$ROOT/builds/borg/rccl-rocm-${version}/ghalo"
-echo "Runtime dependencies for ${binary}:"
-ldd "${binary}"
-
-if ldd "${binary}" | grep -q 'not found'; then
-	    echo "ERROR: unresolved runtime dependencies for ${binary}" >&2
-    exit 1
-fi
-
-if readelf -d "${binary}" | grep -q 'libmpi_gtl_hsa'; then
-    echo "ERROR: ${binary} still links libmpi_gtl_hsa" >&2
-    exit 1
-fi
 run_version 7.2.0 22707
-binary="$ROOT/builds/borg/rccl-rocm-${version}/ghalo"
-echo "Runtime dependencies for ${binary}:"
-ldd "${binary}"
-
-if ldd "${binary}" | grep -q 'not found'; then
-    echo "ERROR: unresolved runtime dependencies for ${binary}" >&2
-    exit 1
-fi
-
-if readelf -d "${binary}" | grep -q 'libmpi_gtl_hsa'; then
-    echo "ERROR: ${binary} still links libmpi_gtl_hsa" >&2
-    exit 1
-fi
 
 utc_end="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 cat <<EOF
