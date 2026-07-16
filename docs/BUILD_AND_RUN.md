@@ -405,6 +405,81 @@ GHALO_SYSTEM_NAME=borg scripts/run.sh \
   --label stream-ordered-halo64-50samples-iter
 ```
 
+### Borg Iteration Stall Diagnostic
+
+The focused Borg stall diagnostic batch script compares RCCL conservative,
+RCCL stream-ordered, and MPI-HIP inside the same 8-node allocation. Each case
+uses one gHALO executable, 100 persistent samples for one halo size, validation,
+phase timing, and per-iteration timing records filtered at 1000 us.
+
+Submit the job from the repository root:
+
+```sh
+JOBID=$(sbatch slurm/borg_iteration_stall_diagnostic.sbatch | awk '{print $4}')
+echo "${JOBID}"
+```
+
+The script represents these Slurm resources:
+
+```text
+#SBATCH -A VEN004
+#SBATCH -p testing
+#SBATCH --reservation=jlbeck.testing
+#SBATCH -N 8
+#SBATCH --ntasks=64
+#SBATCH --ntasks-per-node=8
+#SBATCH -t 00:20:00
+```
+
+Monitor the job with:
+
+```sh
+squeue -j "${JOBID}"
+scontrol show job "${JOBID}"
+tail -f "batch-logs/borg-iteration-stall-${JOBID}.out"
+```
+
+The three result labels are:
+
+```text
+borg-iteration-stall-rccl-conservative-halo128
+borg-iteration-stall-rccl-stream-halo64
+borg-iteration-stall-mpi-hip-halo128
+```
+
+After completion, analyze the repeatability result bundles:
+
+```sh
+python3 tools/analyze_iteration_stalls.py \
+  --system borg \
+  --rocm-version 6.4.2 \
+  --category repeatability \
+  --label-filter borg-iteration-stall \
+  --threshold-us 1000 \
+  --output-dir analysis/borg-iteration-stall-${JOBID}
+```
+
+The analyzer writes:
+
+```text
+iteration-stall-report.md
+iteration-stall-summary.csv
+iteration-stall-summary.json
+```
+
+Interpretation:
+
+- `F` in the sample sequence means a sample had no iteration above the
+  threshold; `S` means at least one iteration exceeded it.
+- One isolated bad iteration suggests a brief transient or rank-local outlier.
+- Multiple bad iterations in one sample suggest a longer disruption inside the
+  same persistent process.
+- Nearly-all-slow samples suggest a sustained slow mode for that sample rather
+  than a single catastrophic iteration.
+- Compare RCCL conservative, RCCL stream-ordered, and MPI-HIP before assigning
+  the cause to RCCL synchronization policy rather than placement or system
+  noise.
+
 For RCCL full correctness validation:
 
 ```sh

@@ -897,6 +897,24 @@ EOF
   fi
 )
 
+test_borg_iteration_stall_sbatch() (
+  local script="${ROOT}/slurm/borg_iteration_stall_diagnostic.sbatch"
+  assert_contains '#SBATCH -p testing' "${script}" \
+    "Borg stall diagnostic uses testing partition"
+  assert_contains '#SBATCH --reservation=jlbeck.testing' "${script}" \
+    "Borg stall diagnostic uses requested reservation"
+  assert_contains '--record-iteration-times' "${script}" \
+    "Borg stall diagnostic records iteration timing"
+  assert_contains '--iteration-stall-threshold-us 1000' "${script}" \
+    "Borg stall diagnostic uses requested stall threshold"
+  assert_contains 'borg-iteration-stall-rccl-conservative-halo128' "${script}" \
+    "Borg stall diagnostic labels RCCL conservative"
+  assert_contains 'borg-iteration-stall-rccl-stream-halo64' "${script}" \
+    "Borg stall diagnostic labels RCCL stream"
+  assert_contains 'borg-iteration-stall-mpi-hip-halo128' "${script}" \
+    "Borg stall diagnostic labels MPI-HIP"
+)
+
 test_borg_build_alias_resolution
 test_native_default_for_generic_system
 test_missing_aliased_binary_error
@@ -921,3 +939,4 @@ test_generate_analysis_report_wrapper
 test_capture_environment_explicit_output_dir
 test_validation_suite_verifies_results
 test_migrate_results_dry_run
+test_borg_iteration_stall_sbatch

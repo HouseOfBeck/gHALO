@@ -9,6 +9,6 @@
 #SBATCH -o batch-logs/validation-%j.out
 #SBATCH -e batch-logs/validation-%j.err
 
-cd "$SLURM_SUBMIT_DIR"
+cd "$SLURM_SUBMIT_DIR" || exit
 
 scripts/run_validation_suite.sh

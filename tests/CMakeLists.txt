@@ -16,6 +16,10 @@ if(Python3_Interpreter_FOUND)
     NAME ghalo_analysis_smoke
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_ghalo_analyze.py
   )
+  add_test(
+    NAME ghalo_iteration_stall_analysis_smoke
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_iteration_stalls.py
+  )
 endif()
 
 if(GHALO_ENABLE_RCCL)
