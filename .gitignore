@@ -29,3 +29,8 @@ environment-capture-*/
 .vscode/
 *.swp
 *.swo
+
+__pycache__/
+*.pyc
+test-logs/
+analysis/
