@@ -514,6 +514,61 @@ void RCCLBackend::reset_phase_timing() {
   phase_timing_collecting_ = phase_timing_enabled_;
 }
 
+void RCCLBackend::begin_iteration_phase_timing() {
+  if (stage_b_only_) {
+    throw std::runtime_error(
+        "iteration phase timing is not supported by RCCL Stage B debug mode");
+  }
+  iteration_phase_start_ = phase_timing_;
+  phase_timing_collecting_ = true;
+}
+
+PhaseTimingResult RCCLBackend::end_iteration_phase_timing(
+    double total_seconds) {
+  if (!phase_timing_enabled_) {
+    phase_timing_collecting_ = false;
+  }
+
+  PhaseTimingResult result;
+  result.north_south_communication_seconds =
+      phase_timing_.north_south_communication_seconds -
+      iteration_phase_start_.north_south_communication_seconds;
+  result.north_south_sync_seconds =
+      phase_timing_.north_south_sync_seconds -
+      iteration_phase_start_.north_south_sync_seconds;
+  result.transpose_copy_seconds =
+      phase_timing_.transpose_copy_seconds -
+      iteration_phase_start_.transpose_copy_seconds;
+  result.transpose_sync_seconds =
+      phase_timing_.transpose_sync_seconds -
+      iteration_phase_start_.transpose_sync_seconds;
+  result.east_west_communication_seconds =
+      phase_timing_.east_west_communication_seconds -
+      iteration_phase_start_.east_west_communication_seconds;
+  result.east_west_sync_seconds =
+      phase_timing_.east_west_sync_seconds -
+      iteration_phase_start_.east_west_sync_seconds;
+  result.north_south_communication_enqueue_seconds =
+      phase_timing_.north_south_communication_enqueue_seconds -
+      iteration_phase_start_.north_south_communication_enqueue_seconds;
+  result.transpose_copy_enqueue_seconds =
+      phase_timing_.transpose_copy_enqueue_seconds -
+      iteration_phase_start_.transpose_copy_enqueue_seconds;
+  result.east_west_communication_enqueue_seconds =
+      phase_timing_.east_west_communication_enqueue_seconds -
+      iteration_phase_start_.east_west_communication_enqueue_seconds;
+  result.final_stream_sync_seconds =
+      phase_timing_.final_stream_sync_seconds -
+      iteration_phase_start_.final_stream_sync_seconds;
+  result.phase_sum_seconds = phase_timing_sum(result);
+  result.total_exchange_seconds = total_seconds;
+  result.total_minus_sum_of_phase_maxima_seconds =
+      total_seconds - result.phase_sum_seconds;
+  result.unattributed_seconds =
+      result.total_minus_sum_of_phase_maxima_seconds;
+  return result;
+}
+
 PhaseTimingResult RCCLBackend::phase_timing_result(int iterations,
                                                    double total_seconds) {
   if (iterations <= 0) {

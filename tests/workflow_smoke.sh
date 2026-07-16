@@ -636,6 +636,7 @@ test_submit_dry_run() (
     --time 00:05:00 \
     --target-seconds 0.1 \
     --record-iteration-times \
+    --record-iteration-phase-times \
     --iteration-stall-threshold-us 1000 \
     --label "dry run label" \
     --dry-run >"${output}"
@@ -645,8 +646,8 @@ test_submit_dry_run() (
   assert_contains "scripts/batch-job.sh ${ROOT}" \
     "${output}" "repo root follows batch-job path"
   assert_contains 'dry\ run\ label' "${output}" "label is shell escaped"
-  assert_contains ' 1 1000 0 0 0 ' "${output}" \
-    "dry-run forwards iteration timing batch arguments"
+  assert_contains ' 1 1 1000 0 0 0 ' "${output}" \
+    "dry-run forwards iteration phase timing batch arguments"
 
   GHALO_SYSTEM_NAME=frontier "${ROOT}/scripts/submit.sh" \
     --backend rccl \
@@ -684,7 +685,7 @@ test_submit_rank_layout_failure() (
 test_batch_job_requires_slurm() (
   local output="${GHALO_TEST_TMPDIR}/ghalo-batch-job-no-slurm.txt"
   if env -u SLURM_JOB_ID "${ROOT}/scripts/batch-job.sh" \
-    "${ROOT}" frontier mpi TEST123 batch 1 4 4 0.1 2 1024 2 1 0 "" 0 0 0 "" "" smoke "" submit out err \
+    "${ROOT}" frontier mpi TEST123 batch 1 4 4 0.1 2 1024 2 1 0 0 "" 0 0 0 "" "" smoke "" submit out err \
     >"${output}" 2>&1; then
     printf 'expected batch-job without SLURM_JOB_ID to fail\n' >&2
     exit 1
@@ -728,6 +729,7 @@ EOF
     2 \
     1 \
     1 \
+    1 \
     1000 \
     0 \
     0 \
@@ -749,8 +751,10 @@ EOF
     "batch job invoked run.sh from explicit root"
   assert_contains "--min-halo 2 --max-halo 1024 --halo-multiplier 2 --samples-per-halo 1" \
     "${marker}" "batch job forwards halo range"
-  assert_contains "--record-iteration-times --iteration-stall-threshold-us 1000" \
+  assert_contains "--record-iteration-times --record-iteration-phase-times --iteration-stall-threshold-us 1000" \
     "${marker}" "batch job forwards iteration timing diagnostics"
+  assert_contains "--record-iteration-phase-times" \
+    "${marker}" "batch job forwards iteration phase timing diagnostics"
   assert_not_contains "${spool_dir}/scripts/run.sh" "${output}" \
     "batch job did not derive run.sh from spool path"
   assert_not_contains "${spool_dir}/scripts/run.sh" "${marker}" \
@@ -915,6 +919,29 @@ test_borg_iteration_stall_sbatch() (
     "Borg stall diagnostic labels MPI-HIP"
 )
 
+test_iteration_phase_sbatch_scripts() (
+  local borg_script="${ROOT}/slurm/borg_iteration_phase_diagnostic.sbatch"
+  local frontier_script="${ROOT}/slurm/frontier_iteration_phase_diagnostic.sbatch"
+  for script in "${borg_script}" "${frontier_script}"; do
+    assert_contains '--record-iteration-phase-times' "${script}" \
+      "iteration phase diagnostic records phase timing"
+    assert_contains '--iteration-stall-threshold-us 1000' "${script}" \
+      "iteration phase diagnostic uses requested threshold"
+    assert_contains '--samples-per-halo 100' "${script}" \
+      "iteration phase diagnostic uses persistent samples"
+    assert_contains 'iteration-phase-rccl-conservative-halo128' "${script}" \
+      "iteration phase diagnostic labels conservative case"
+    assert_contains 'iteration-phase-rccl-stream-halo64' "${script}" \
+      "iteration phase diagnostic labels stream case"
+    assert_contains 'iteration-phase-mpi-hip-halo128' "${script}" \
+      "iteration phase diagnostic labels MPI-HIP case"
+  done
+  assert_contains '#SBATCH -p testing' "${borg_script}" \
+    "Borg phase diagnostic uses testing partition"
+  assert_contains '#SBATCH -p batch' "${frontier_script}" \
+    "Frontier phase diagnostic uses batch partition"
+)
+
 test_borg_build_alias_resolution
 test_native_default_for_generic_system
 test_missing_aliased_binary_error
@@ -940,3 +967,4 @@ test_capture_environment_explicit_output_dir
 test_validation_suite_verifies_results
 test_migrate_results_dry_run
 test_borg_iteration_stall_sbatch
+test_iteration_phase_sbatch_scripts

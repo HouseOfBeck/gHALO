@@ -511,6 +511,53 @@ void MPIHIPBackend::reset_phase_timing() {
   phase_timing_collecting_ = phase_timing_enabled_;
 }
 
+void MPIHIPBackend::begin_iteration_phase_timing() {
+  iteration_phase_start_ = phase_timing_;
+  phase_timing_collecting_ = true;
+}
+
+PhaseTimingResult MPIHIPBackend::end_iteration_phase_timing(
+    double total_seconds) {
+  if (!phase_timing_enabled_) {
+    phase_timing_collecting_ = false;
+  }
+
+  PhaseTimingResult result;
+  result.input_device_copy_seconds =
+      phase_timing_.input_device_copy_seconds -
+      iteration_phase_start_.input_device_copy_seconds;
+  result.north_south_mpi_seconds =
+      phase_timing_.north_south_mpi_seconds -
+      iteration_phase_start_.north_south_mpi_seconds;
+  result.north_south_sync_seconds =
+      phase_timing_.north_south_sync_seconds -
+      iteration_phase_start_.north_south_sync_seconds;
+  result.transpose_device_copy_seconds =
+      phase_timing_.transpose_device_copy_seconds -
+      iteration_phase_start_.transpose_device_copy_seconds;
+  result.transpose_copy_sync_seconds =
+      phase_timing_.transpose_copy_sync_seconds -
+      iteration_phase_start_.transpose_copy_sync_seconds;
+  result.east_west_mpi_seconds =
+      phase_timing_.east_west_mpi_seconds -
+      iteration_phase_start_.east_west_mpi_seconds;
+  result.east_west_sync_seconds =
+      phase_timing_.east_west_sync_seconds -
+      iteration_phase_start_.east_west_sync_seconds;
+  result.north_south_communication_seconds =
+      result.north_south_mpi_seconds;
+  result.transpose_copy_seconds = result.transpose_device_copy_seconds;
+  result.transpose_sync_seconds = result.transpose_copy_sync_seconds;
+  result.east_west_communication_seconds = result.east_west_mpi_seconds;
+  result.phase_sum_seconds = phase_timing_sum(result);
+  result.total_exchange_seconds = total_seconds;
+  result.total_minus_sum_of_phase_maxima_seconds =
+      total_seconds - result.phase_sum_seconds;
+  result.unattributed_seconds =
+      result.total_minus_sum_of_phase_maxima_seconds;
+  return result;
+}
+
 double MPIHIPBackend::reduced_phase_average(double local_total_seconds,
                                             int iterations) const {
   const double local_average =

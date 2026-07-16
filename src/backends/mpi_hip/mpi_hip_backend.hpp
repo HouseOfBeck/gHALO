@@ -62,6 +62,8 @@ public:
   void reset_phase_timing() override;
   PhaseTimingResult phase_timing_result(int iterations,
                                         double total_seconds) override;
+  void begin_iteration_phase_timing() override;
+  PhaseTimingResult end_iteration_phase_timing(double total_seconds) override;
 
 private:
   struct PhaseTimingAccumulator {
@@ -109,6 +111,7 @@ private:
   bool phase_timing_enabled_ = false;
   bool phase_timing_collecting_ = false;
   PhaseTimingAccumulator phase_timing_;
+  PhaseTimingAccumulator iteration_phase_start_;
   HIPBuffer hins_;
   HIPBuffer hons_;
   HIPBuffer hiew_;

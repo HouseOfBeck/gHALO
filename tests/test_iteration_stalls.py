@@ -24,6 +24,7 @@ def write_case(
     samples: int = 4,
     halo: int = 128,
     records=None,
+    phase_records=None,
     metadata_threshold: float = 1000.0,
     backend: str = "RCCLBackend",
     sync_mode: str = "conservative",
@@ -96,6 +97,55 @@ def write_case(
                             "world_size": 64,
                         }
                     )
+    if phase_records is not None:
+        with (path / "iteration-phase-times.csv").open(
+            "w", newline="", encoding="utf-8"
+        ) as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=[
+                    "version",
+                    "backend",
+                    "rccl_sync_mode",
+                    "world_size",
+                    "halo_words",
+                    "sample_index",
+                    "sample_count",
+                    "iteration_index",
+                    "iterations_in_sample",
+                    "stall_threshold_us",
+                    "total_iteration_seconds",
+                    "total_iteration_max_rank",
+                    "backend_schema",
+                    "phase_name",
+                    "phase_seconds",
+                    "phase_max_rank",
+                ],
+            )
+            writer.writeheader()
+            for sample, iteration, phase_name, phase_us, rank in phase_records:
+                writer.writerow(
+                    {
+                        "version": "0.3.0",
+                        "backend": backend,
+                        "rccl_sync_mode": sync_mode,
+                        "world_size": 64,
+                        "halo_words": halo,
+                        "sample_index": sample,
+                        "sample_count": samples,
+                        "iteration_index": iteration,
+                        "iterations_in_sample": iterations,
+                        "stall_threshold_us": metadata_threshold,
+                        "total_iteration_seconds": 0.002,
+                        "total_iteration_max_rank": 7,
+                        "backend_schema": "rccl-stream-ordered"
+                        if sync_mode == "stream-ordered"
+                        else "rccl-conservative",
+                        "phase_name": phase_name,
+                        "phase_seconds": phase_us * 1.0e-6,
+                        "phase_max_rank": rank,
+                    }
+                )
     return path
 
 
@@ -113,7 +163,15 @@ class IterationStallAnalysisTests(unittest.TestCase):
 
     def test_one_isolated_stall(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            case = write_case(Path(tmp), "isolated", records=[(2, 7, 1500.0, 3)])
+            case = write_case(
+                Path(tmp),
+                "isolated",
+                records=[(2, 7, 1500.0, 3)],
+                phase_records=[
+                    (2, 7, "north_south_communication", 1200.0, 3),
+                    (2, 7, "east_west_sync", 100.0, 4),
+                ],
+            )
             summary = stalls.analyze_case(case, 1000.0)
             self.assertEqual(summary.stall_count, 1)
             self.assertEqual(summary.samples_with_stalls, 1)
@@ -121,6 +179,19 @@ class IterationStallAnalysisTests(unittest.TestCase):
             self.assertEqual(summary.isolated_bad_samples, 1)
             self.assertEqual(summary.multiple_bad_samples, 0)
             self.assertEqual(summary.affected_indices[0][:3], (128, 2, 7))
+            self.assertEqual(summary.stalled_iterations_with_phase_data, 1)
+            self.assertEqual(summary.stall_cause_classification, "communication/enqueue")
+            self.assertEqual(summary.phase_summaries[0].phase_name, "east_west_sync")
+            dominant = {
+                phase.phase_name: phase.dominant_iterations
+                for phase in summary.phase_summaries
+            }
+            self.assertEqual(dominant["north_south_communication"], 1)
+            north_south = next(
+                phase for phase in summary.phase_summaries
+                if phase.phase_name == "north_south_communication"
+            )
+            self.assertEqual(north_south.max_rank_frequency, {3: 1})
 
     def test_multiple_and_nearly_all_stalls(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -147,6 +218,60 @@ class IterationStallAnalysisTests(unittest.TestCase):
             self.assertEqual(summary.longest_stall_free_sequence, 1)
             self.assertEqual(summary.rank_frequency, {1: 1, 2: 2})
 
+    def test_mixed_phase_classification(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            case = write_case(
+                Path(tmp),
+                "mixed-phase",
+                records=[(1, 1, 1500.0, 1), (2, 1, 1600.0, 2)],
+                phase_records=[
+                    (1, 1, "north_south_communication", 1200.0, 1),
+                    (1, 1, "east_west_sync", 100.0, 2),
+                    (2, 1, "north_south_communication", 100.0, 1),
+                    (2, 1, "east_west_sync", 1300.0, 2),
+                ],
+            )
+            summary = stalls.analyze_case(case, 1000.0)
+            self.assertEqual(summary.stalled_iterations_with_phase_data, 2)
+            self.assertEqual(summary.stall_cause_classification, "mixed/unattributed")
+            self.assertEqual(len(summary.phase_iteration_breakdown), 2)
+
+    def test_stream_ordered_phase_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            case = write_case(
+                Path(tmp),
+                "stream",
+                sync_mode="stream-ordered",
+                records=[(1, 1, 1800.0, 6)],
+                phase_records=[
+                    (1, 1, "north_south_enqueue", 300.0, 1),
+                    (1, 1, "transpose_enqueue", 200.0, 2),
+                    (1, 1, "east_west_enqueue", 400.0, 3),
+                    (1, 1, "final_stream_sync", 1700.0, 6),
+                ],
+            )
+            summary = stalls.analyze_case(case, 1000.0)
+            self.assertEqual(summary.stall_cause_classification, "synchronization/final sync")
+            self.assertIn("final_stream_sync", {p.phase_name for p in summary.phase_summaries})
+
+    def test_mpi_hip_phase_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            case = write_case(
+                Path(tmp),
+                "mpi-hip",
+                backend="MPIHIPBackend",
+                sync_mode="",
+                records=[(1, 1, 1800.0, 6)],
+                phase_records=[
+                    (1, 1, "input_device_copy", 100.0, 1),
+                    (1, 1, "north_south_mpi", 1600.0, 6),
+                    (1, 1, "east_west_sync", 200.0, 2),
+                ],
+            )
+            summary = stalls.analyze_case(case, 1000.0)
+            self.assertEqual(summary.stall_cause_classification, "communication/enqueue")
+            self.assertIn("north_south_mpi", {p.phase_name for p in summary.phase_summaries})
+
     def test_threshold_boundary_is_inclusive(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             case = write_case(Path(tmp), "boundary", records=[(1, 1, 1000.0, 9)])
@@ -166,12 +291,34 @@ class IterationStallAnalysisTests(unittest.TestCase):
             self.assertEqual(empty_summary.stall_count, 0)
             self.assertTrue(any("empty iteration" in w for w in empty_summary.warnings))
 
+    def test_missing_and_empty_phase_files_warn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = write_case(Path(tmp), "missing-phase", records=[(1, 1, 1500.0, 1)])
+            missing_summary = stalls.analyze_case(missing, 1000.0)
+            self.assertTrue(any("missing iteration phase" in w for w in missing_summary.warnings))
+
+            empty = write_case(Path(tmp), "empty-phase", records=[(1, 1, 1500.0, 1)])
+            (empty / "iteration-phase-times.csv").write_text("", encoding="utf-8")
+            empty_summary = stalls.analyze_case(empty, 1000.0)
+            self.assertTrue(any("empty iteration phase" in w for w in empty_summary.warnings))
+
     def test_inconsistent_sample_metadata_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             case = write_case(Path(tmp), "bad", samples=2)
             payload = json.loads((case / "ghalo.json").read_text(encoding="utf-8"))
             payload["results"][1]["sample_index"] = 1
             (case / "ghalo.json").write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaises(stalls.StallAnalysisError):
+                stalls.analyze_case(case, 1000.0)
+
+    def test_inconsistent_phase_metadata_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            case = write_case(
+                Path(tmp),
+                "bad-phase",
+                records=[(1, 1, 1500.0, 1)],
+                phase_records=[(99, 1, "east_west_sync", 1500.0, 1)],
+            )
             with self.assertRaises(stalls.StallAnalysisError):
                 stalls.analyze_case(case, 1000.0)
 

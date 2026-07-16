@@ -18,6 +18,7 @@ struct BenchmarkConfig {
   std::vector<std::size_t> halo_lengths{};
   double target_seconds = 3.0;
   bool record_iteration_times = false;
+  bool record_iteration_phase_times = false;
   double iteration_stall_threshold_us = 0.0;
   int calibration_iterations = 5;
 };
@@ -31,6 +32,24 @@ struct IterationTimingRecord {
   std::string backend;
   std::string rccl_sync_mode;
   int world_size{};
+};
+
+struct IterationPhaseTimingRecord {
+  std::string backend;
+  std::string rccl_sync_mode;
+  std::string backend_schema;
+  int world_size{};
+  std::size_t halo_words{};
+  std::size_t sample_index{1};
+  std::size_t sample_count{1};
+  std::size_t iteration_index{1};
+  int iterations_in_sample{};
+  double stall_threshold_us{};
+  double total_iteration_seconds{};
+  int total_iteration_max_rank{};
+  std::string phase_name;
+  double phase_seconds{};
+  int phase_max_rank{};
 };
 
 struct BenchmarkResult {
@@ -55,6 +74,11 @@ struct BenchmarkResult {
   std::size_t iteration_records_emitted = 0;
   std::size_t iteration_stall_count = 0;
   std::vector<IterationTimingRecord> iteration_times;
+  bool iteration_phase_timing_enabled = false;
+  std::size_t iteration_phase_records_emitted = 0;
+  std::string iteration_phase_backend_schema;
+  double iteration_phase_stall_threshold_us = 0.0;
+  std::vector<IterationPhaseTimingRecord> iteration_phase_times;
 };
 
 std::vector<BenchmarkResult> run_benchmark(Backend& backend,

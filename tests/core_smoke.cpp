@@ -19,6 +19,7 @@
 #include <string>
 #include <stdexcept>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -86,6 +87,10 @@ public:
     iteration_timing_rank_ = rank;
   }
 
+  void set_memory_location(std::string memory_location) {
+    metadata_.memory_location = std::move(memory_location);
+  }
+
   bool supports_phase_timing() const override { return phase_timing_supported_; }
 
   void set_phase_timing_enabled(bool enabled) override {
@@ -109,6 +114,28 @@ public:
     phase_timing_collecting_ = phase_timing_enabled_;
   }
 
+  void begin_iteration_phase_timing() override {
+    iteration_phase_start_ = phase_timing_;
+    phase_timing_collecting_ = true;
+  }
+
+  ghalo::PhaseTimingResult end_iteration_phase_timing(
+      double total_seconds) override {
+    if (!phase_timing_enabled_) {
+      phase_timing_collecting_ = false;
+    }
+    ghalo::PhaseTimingResult result;
+    result.north_south_mpi_seconds =
+        phase_timing_.north_south_mpi_seconds -
+        iteration_phase_start_.north_south_mpi_seconds;
+    result.east_west_mpi_seconds =
+        phase_timing_.east_west_mpi_seconds -
+        iteration_phase_start_.east_west_mpi_seconds;
+    result.phase_sum_seconds = ghalo::phase_timing_sum(result);
+    result.total_exchange_seconds = total_seconds;
+    return result;
+  }
+
   ghalo::PhaseTimingResult phase_timing_result(int iterations,
                                                double total_seconds) override {
     phase_timing_collecting_ = false;
@@ -130,6 +157,7 @@ private:
   ghalo::TopologyInfo topology_{1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0};
   ghalo::BackendMetadata metadata_{};
   ghalo::PhaseTimingResult phase_timing_{};
+  ghalo::PhaseTimingResult iteration_phase_start_{};
   std::size_t halo_words_ = 0;
   double now_ = 0.0;
   double iteration_timing_offset_seconds_ = 0.0;
@@ -273,6 +301,7 @@ void test_halo_length_generation() {
   assert(benchmark_defaults.halo_multiplier == ghalo::default_halo_multiplier);
   assert(benchmark_defaults.samples_per_halo == 1);
   assert(!benchmark_defaults.record_iteration_times);
+  assert(!benchmark_defaults.record_iteration_phase_times);
   assert(benchmark_defaults.iteration_stall_threshold_us == 0.0);
 
   const auto cli_defaults = parse_cli({"ghalo"});
@@ -281,6 +310,7 @@ void test_halo_length_generation() {
   assert(cli_defaults.halo_multiplier == ghalo::default_halo_multiplier);
   assert(cli_defaults.samples_per_halo == 1);
   assert(!cli_defaults.record_iteration_times);
+  assert(!cli_defaults.record_iteration_phase_times);
   assert(cli_defaults.iteration_stall_threshold_us == 0.0);
 
   const auto defaults = ghalo::generate_halo_lengths(
@@ -473,6 +503,41 @@ void test_iteration_timing_threshold_filtering() {
   assert(threw);
 }
 
+void test_iteration_phase_timing_records() {
+  MockBackend backend(false, true);
+  backend.set_memory_location("device");
+  backend.set_iteration_timing_reduction(0.0, 5);
+  ghalo::BenchmarkConfig config;
+  config.target_seconds = 0.01;
+  config.calibration_iterations = 2;
+  config.min_halo = 2;
+  config.max_halo = 2;
+  config.record_iteration_times = true;
+  config.record_iteration_phase_times = true;
+  config.iteration_stall_threshold_us = 5000.0;
+
+  const auto results = ghalo::run_benchmark(backend, config);
+  assert(results.size() == 1);
+  const auto& result = results.front();
+  assert(result.iteration_phase_timing_enabled);
+  assert(result.iteration_phase_backend_schema == "mpi-hip");
+  assert(result.iteration_phase_stall_threshold_us == 5000.0);
+  assert(result.iteration_records_emitted ==
+         static_cast<std::size_t>(result.iterations));
+  assert(result.iteration_phase_records_emitted ==
+         static_cast<std::size_t>(result.iterations) * 7);
+  assert(result.iteration_phase_times.size() ==
+         result.iteration_phase_records_emitted);
+  assert(result.iteration_phase_times.front().halo_words == 2);
+  assert(result.iteration_phase_times.front().sample_index == 1);
+  assert(result.iteration_phase_times.front().iteration_index == 1);
+  assert(result.iteration_phase_times.front().iterations_in_sample ==
+         result.iterations);
+  assert(result.iteration_phase_times.front().sample_count == 1);
+  assert(result.iteration_phase_times.front().backend_schema == "mpi-hip");
+  assert(result.iteration_phase_times.front().total_iteration_max_rank == 5);
+}
+
 void test_north_south_stage_b_conceptual_plans() {
   check_north_south_plan(topology_for(1, 1, 0));
 
@@ -654,7 +719,14 @@ void test_cli_phase_timing_parse() {
       parse_cli({"ghalo", "--record-iteration-times",
                  "--iteration-stall-threshold-us", "1000.5"});
   assert(iteration_options.record_iteration_times);
+  assert(!iteration_options.record_iteration_phase_times);
   assert(iteration_options.iteration_stall_threshold_us == 1000.5);
+
+  const auto iteration_phase_options =
+      parse_cli({"ghalo", "--record-iteration-times",
+                 "--record-iteration-phase-times"});
+  assert(iteration_phase_options.record_iteration_times);
+  assert(iteration_phase_options.record_iteration_phase_times);
 
   for (const std::string backend : {"mpi", "mpi-hip", "rccl"}) {
     const auto range_options =
@@ -727,6 +799,14 @@ void test_cli_phase_timing_parse() {
     }
     assert(bad_threshold_threw);
   }
+
+  bool bad_phase_threw = false;
+  try {
+    (void)parse_cli({"ghalo", "--record-iteration-phase-times"});
+  } catch (const std::invalid_argument&) {
+    bad_phase_threw = true;
+  }
+  assert(bad_phase_threw);
 
   const char* bad_argv_storage[] = {"ghalo", "--phase-timing", "--csv"};
   auto* bad_argv = const_cast<char**>(bad_argv_storage);
@@ -847,6 +927,49 @@ void test_output_with_iteration_timing() {
          std::string::npos);
   assert(json.find("\"iteration_records_emitted\": 1") != std::string::npos);
   assert(json.find("\"iteration_stall_count\": 1") != std::string::npos);
+  assert_python_json_loads(json_path);
+}
+
+void test_output_with_iteration_phase_timing() {
+  auto result = sample_result();
+  result.iteration_timing_enabled = true;
+  result.iteration_phase_timing_enabled = true;
+  result.iteration_phase_backend_schema = "rccl-conservative";
+  result.iteration_phase_stall_threshold_us = 1000.0;
+  result.iteration_phase_records_emitted = 2;
+  result.iteration_phase_times.push_back(
+      {result.backend, "conservative", "rccl-conservative", 1, 2, 1, 1, 3,
+       5, 1000.0, 0.0015, 4, "north_south_communication", 0.0010, 2});
+  result.iteration_phase_times.push_back(
+      {result.backend, "conservative", "rccl-conservative", 1, 2, 1, 1, 3,
+       5, 1000.0, 0.0015, 4, "east_west_sync", 0.0005, 3});
+
+  ScopedTempDirectory temp;
+
+  std::ostringstream console;
+  ghalo::write_console(console, {result});
+  assert(console.str().find("Iteration phase timing diagnostics") !=
+         std::string::npos);
+  assert(console.str().find("phase records emitted: 2") !=
+         std::string::npos);
+
+  const auto csv_path = temp.file("iteration-phase-times.csv");
+  ghalo::write_iteration_phase_times_csv(csv_path.string(), {result});
+  const std::string csv = read_file(csv_path);
+  assert(csv.find("backend_schema,phase_name,phase_seconds,phase_max_rank") !=
+         std::string::npos);
+  assert(csv.find("\"north_south_communication\"") != std::string::npos);
+  assert(csv.find("\"east_west_sync\"") != std::string::npos);
+
+  const auto json_path = temp.file("ghalo_core_smoke_iteration_phase.json");
+  ghalo::write_json(json_path.string(), {result});
+  const std::string json = read_file(json_path);
+  assert(json.find("\"iteration_phase_timing_enabled\": true") !=
+         std::string::npos);
+  assert(json.find("\"iteration_phase_records_emitted\": 2") !=
+         std::string::npos);
+  assert(json.find("\"iteration_phase_backend_schema\": "
+                   "\"rccl-conservative\"") != std::string::npos);
   assert_python_json_loads(json_path);
 }
 
@@ -1051,6 +1174,7 @@ int main() {
   test_benchmark_samples_per_halo();
   test_iteration_timing_records_are_halo_major_sample_minor();
   test_iteration_timing_threshold_filtering();
+  test_iteration_phase_timing_records();
   test_phase_sum_calculation();
   test_unsupported_phase_timing();
   test_cli_phase_timing_parse();
@@ -1058,6 +1182,7 @@ int main() {
   test_output_without_phase_timing_is_unchanged();
   test_output_with_multiple_samples();
   test_output_with_iteration_timing();
+  test_output_with_iteration_phase_timing();
   test_json_string_escaping_is_strict();
   test_output_with_phase_timing();
   test_output_with_rccl_phase_timing();

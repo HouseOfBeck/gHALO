@@ -104,6 +104,24 @@ std::size_t total_iteration_stall_count(
   return total;
 }
 
+std::size_t total_iteration_phase_records_emitted(
+    const std::vector<BenchmarkResult>& results) {
+  std::size_t total = 0;
+  for (const auto& result : results) {
+    total += result.iteration_phase_records_emitted;
+  }
+  return total;
+}
+
+bool has_iteration_phase_timing(const std::vector<BenchmarkResult>& results) {
+  for (const auto& result : results) {
+    if (result.iteration_phase_timing_enabled) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool has_input_device_copy_phase(const std::vector<BenchmarkResult>& results) {
   for (const auto& result : results) {
     if (result.phase_timing.has_value() &&
@@ -341,6 +359,15 @@ void write_console(std::ostream& out,
       }
     }
   }
+
+  if (has_iteration_phase_timing(results)) {
+    out << "\nIteration phase timing diagnostics:\n";
+    out << "  iteration phase timing: enabled\n";
+    out << "  phase records emitted: "
+        << total_iteration_phase_records_emitted(results) << "\n";
+    out << "  schema: " << results.front().iteration_phase_backend_schema
+        << "\n";
+  }
 }
 
 void write_csv(const std::string& path,
@@ -521,6 +548,15 @@ void write_json(const std::string& path,
         << r.iteration_records_emitted << ",\n";
     out << "        \"iteration_stall_count\": "
         << r.iteration_stall_count << ",\n";
+    out << "        \"iteration_phase_timing_enabled\": "
+        << (r.iteration_phase_timing_enabled ? "true" : "false") << ",\n";
+    out << "        \"iteration_phase_records_emitted\": "
+        << r.iteration_phase_records_emitted << ",\n";
+    out << "        \"iteration_phase_backend_schema\": ";
+    write_json_string(out, r.iteration_phase_backend_schema);
+    out << ",\n";
+    out << "        \"iteration_phase_stall_threshold_us\": "
+        << r.iteration_phase_stall_threshold_us << ",\n";
     if (r.metadata.phase_timing_enabled) {
       out << "        \"phase_timing_metadata\": {\n";
       out << "          \"enabled\": true,\n";
@@ -642,6 +678,36 @@ void write_iteration_times_csv(const std::string& path,
           << ',' << record.backend << ',';
       write_json_string(out, record.rccl_sync_mode);
       out << ',' << record.world_size << '\n';
+    }
+  }
+}
+
+void write_iteration_phase_times_csv(
+    const std::string& path, const std::vector<BenchmarkResult>& results) {
+  std::ofstream out(path);
+  require_stream(out, path);
+  out << "version,backend,rccl_sync_mode,world_size,halo_words,"
+         "sample_index,sample_count,iteration_index,iterations_in_sample,"
+         "stall_threshold_us,total_iteration_seconds,total_iteration_max_rank,"
+         "backend_schema,phase_name,phase_seconds,phase_max_rank\n";
+  out << std::scientific << std::setprecision(12);
+  for (const auto& result : results) {
+    for (const auto& record : result.iteration_phase_times) {
+      out << version << ',';
+      write_json_string(out, record.backend);
+      out << ',';
+      write_json_string(out, record.rccl_sync_mode);
+      out << ',' << record.world_size << ',' << record.halo_words << ','
+          << record.sample_index << ',' << record.sample_count << ','
+          << record.iteration_index << ',' << record.iterations_in_sample
+          << ',' << record.stall_threshold_us << ','
+          << record.total_iteration_seconds << ','
+          << record.total_iteration_max_rank << ',';
+      write_json_string(out, record.backend_schema);
+      out << ',';
+      write_json_string(out, record.phase_name);
+      out << ',' << record.phase_seconds << ',' << record.phase_max_rank
+          << '\n';
     }
   }
 }

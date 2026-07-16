@@ -405,6 +405,94 @@ GHALO_SYSTEM_NAME=borg scripts/run.sh \
   --label stream-ordered-halo64-50samples-iter
 ```
 
+Use `--record-iteration-phase-times` with `--record-iteration-times` to record
+phase timing for only those measured iterations that pass the existing
+`--iteration-stall-threshold-us` filter. gHALO writes these records to
+`iteration-phase-times.csv` using a normalized schema: one row per emitted
+iteration and phase, with `phase_name`, `phase_seconds`, and
+`phase_max_rank`.
+
+The phase diagnostic records local phase durations during the measured
+iteration, then performs max-rank reductions after the complete timed sample.
+This avoids adding global reductions inside the timed exchange sequence. The
+diagnostic still adds overhead after each sample and should be used for
+diagnosis rather than publication timing. Phase maxima may come from different
+ranks, so the sum of phase maxima is not expected to equal the total iteration
+maximum.
+
+Example Borg RCCL conservative phase diagnostic:
+
+```sh
+scripts/run.sh \
+  --system borg \
+  --backend rccl \
+  --nodes 8 \
+  --ranks 64 \
+  --ranks-per-node 8 \
+  --target-seconds 0.1 \
+  --min-halo 128 \
+  --max-halo 128 \
+  --samples-per-halo 100 \
+  --record-iteration-times \
+  --record-iteration-phase-times \
+  --iteration-stall-threshold-us 1000 \
+  --validate \
+  --phase-timing \
+  --rccl-sync-mode conservative \
+  --category repeatability \
+  --label borg-iteration-phase-rccl-conservative-halo128
+```
+
+Example Frontier RCCL conservative phase diagnostic:
+
+```sh
+scripts/run.sh \
+  --system frontier \
+  --backend rccl \
+  --nodes 8 \
+  --ranks 64 \
+  --ranks-per-node 8 \
+  --target-seconds 0.1 \
+  --min-halo 128 \
+  --max-halo 128 \
+  --samples-per-halo 100 \
+  --record-iteration-times \
+  --record-iteration-phase-times \
+  --iteration-stall-threshold-us 1000 \
+  --validate \
+  --phase-timing \
+  --rccl-sync-mode conservative \
+  --category repeatability \
+  --label frontier-iteration-phase-rccl-conservative-halo128
+```
+
+Submit the packaged batch experiments with:
+
+```sh
+sbatch slurm/borg_iteration_phase_diagnostic.sbatch
+sbatch slurm/frontier_iteration_phase_diagnostic.sbatch
+```
+
+Analyze phase diagnostics with:
+
+```sh
+python3 tools/analyze_iteration_stalls.py \
+  --system borg \
+  --rocm-version 6.4.2 \
+  --category repeatability \
+  --label-filter iteration-phase \
+  --threshold-us 1000 \
+  --output-dir analysis/borg-iteration-phase
+```
+
+The analyzer reports the dominant phase by iteration count, cumulative phase
+time, median phase time, maximum phase time, and phase max-rank frequency. For
+RCCL conservative runs, compare north/south communication, north/south sync,
+transpose copy/sync, east/west communication, and east/west sync. For
+stream-ordered runs, compare north/south enqueue, transpose enqueue, east/west
+enqueue, and final stream sync. For MPI-HIP, compare the available GPU-aware MPI
+and synchronization phases.
+
 ### Borg Iteration Stall Diagnostic
 
 The focused Borg stall diagnostic batch script compares RCCL conservative,

@@ -27,6 +27,8 @@ Options:
   --halo-multiplier N           Halo length multiplier. Default: 2.
   --samples-per-halo N          Independent timed samples per halo. Default: 1.
   --record-iteration-times      Write per-iteration max-rank timing diagnostics.
+  --record-iteration-phase-times
+                                Write per-phase timing for threshold-matched iterations.
   --iteration-stall-threshold-us VALUE
                                 Emit iteration timing records at or above VALUE us.
                                 Default/zero emits every measured iteration.
@@ -80,6 +82,7 @@ max_halo="1024"
 halo_multiplier="2"
 samples_per_halo="1"
 record_iteration_times=0
+record_iteration_phase_times=0
 iteration_stall_threshold_us=""
 validate=0
 phase_timing=0
@@ -169,6 +172,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --record-iteration-times)
       record_iteration_times=1
+      shift
+      ;;
+    --record-iteration-phase-times)
+      record_iteration_phase_times=1
       shift
       ;;
     --iteration-stall-threshold-us)
@@ -309,6 +316,10 @@ if [[ -n "${iteration_stall_threshold_us}" ]]; then
   [[ "${iteration_stall_threshold_us}" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]] ||
     ghalo_die "--iteration-stall-threshold-us must be nonnegative"
 fi
+if [[ "${record_iteration_phase_times}" -eq 1 &&
+      "${record_iteration_times}" -ne 1 ]]; then
+  ghalo_die "--record-iteration-phase-times requires --record-iteration-times"
+fi
 [[ "${halo_multiplier}" -gt 1 ]] ||
   ghalo_die "--halo-multiplier must be greater than 1"
 [[ "${max_halo}" -ge "${min_halo}" ]] ||
@@ -394,6 +405,7 @@ sbatch_command+=(
   "${halo_multiplier}"
   "${samples_per_halo}"
   "${record_iteration_times}"
+  "${record_iteration_phase_times}"
   "${iteration_stall_threshold_us}"
   "${validate}"
   "${phase_timing}"

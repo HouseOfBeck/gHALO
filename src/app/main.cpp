@@ -55,6 +55,15 @@ std::string iteration_times_path_for_csv(const std::string& csv_path) {
   return (parent / "iteration-times.csv").string();
 }
 
+std::string iteration_phase_times_path_for_csv(const std::string& csv_path) {
+  const std::filesystem::path path(csv_path);
+  const auto parent = path.parent_path();
+  if (parent.empty()) {
+    return "iteration-phase-times.csv";
+  }
+  return (parent / "iteration-phase-times.csv").string();
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -79,6 +88,8 @@ int main(int argc, char** argv) {
     config.halo_multiplier = options.halo_multiplier;
     config.samples_per_halo = options.samples_per_halo;
     config.record_iteration_times = options.record_iteration_times;
+    config.record_iteration_phase_times =
+        options.record_iteration_phase_times;
     config.iteration_stall_threshold_us =
         options.iteration_stall_threshold_us;
 
@@ -100,6 +111,10 @@ int main(int argc, char** argv) {
       if (options.record_iteration_times) {
         ghalo::write_iteration_times_csv(
             iteration_times_path_for_csv(options.csv_path), results);
+      }
+      if (options.record_iteration_phase_times) {
+        ghalo::write_iteration_phase_times_csv(
+            iteration_phase_times_path_for_csv(options.csv_path), results);
       }
     }
   } catch (const std::exception& error) {

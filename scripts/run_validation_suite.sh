@@ -21,6 +21,8 @@ Options:
   --halo-multiplier N       Halo length multiplier. Default: 2.
   --samples-per-halo N      Independent timed samples per halo. Default: 1.
   --record-iteration-times  Write per-iteration max-rank timing diagnostics.
+  --record-iteration-phase-times
+                            Write per-phase timing for threshold-matched iterations.
   --iteration-stall-threshold-us VALUE
                             Emit iteration timing records at or above VALUE us.
                             Default/zero emits every measured iteration.
@@ -46,6 +48,7 @@ max_halo="1024"
 halo_multiplier="2"
 samples_per_halo="1"
 record_iteration_times=false
+record_iteration_phase_times=false
 iteration_stall_threshold_us=""
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 log_dir=""
@@ -91,6 +94,10 @@ while [[ $# -gt 0 ]]; do
       record_iteration_times=true
       shift
       ;;
+    --record-iteration-phase-times)
+      record_iteration_phase_times=true
+      shift
+      ;;
     --iteration-stall-threshold-us)
       [[ $# -ge 2 ]] || ghalo_die "--iteration-stall-threshold-us requires a value"
       iteration_stall_threshold_us="$2"
@@ -124,6 +131,10 @@ done
 if [[ -n "${iteration_stall_threshold_us}" ]]; then
   [[ "${iteration_stall_threshold_us}" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]] ||
     ghalo_die "--iteration-stall-threshold-us must be nonnegative"
+fi
+if [[ "${record_iteration_phase_times}" == true &&
+      "${record_iteration_times}" != true ]]; then
+  ghalo_die "--record-iteration-phase-times requires --record-iteration-times"
 fi
 
 command -v jq >/dev/null 2>&1 ||
@@ -266,10 +277,14 @@ verify_result_bundle() {
   require_metadata_key "${result_metadata}" max_halo || return 1
   require_metadata_key "${result_metadata}" halo_multiplier || return 1
   require_metadata_key "${result_metadata}" iteration_timing_enabled || return 1
+  require_metadata_key "${result_metadata}" iteration_phase_timing_enabled || return 1
   require_metadata_key "${result_metadata}" iteration_stall_threshold_us || return 1
   require_metadata_key "${result_metadata}" iteration_total_observed || return 1
   require_metadata_key "${result_metadata}" iteration_records_emitted || return 1
   require_metadata_key "${result_metadata}" iteration_stall_count || return 1
+  require_metadata_key "${result_metadata}" iteration_phase_records_emitted || return 1
+  require_metadata_key "${result_metadata}" iteration_phase_backend_schema || return 1
+  require_metadata_key "${result_metadata}" iteration_phase_stall_threshold_us || return 1
   require_metadata_key "${result_metadata}" requested_nodes || return 1
   require_metadata_key "${result_metadata}" requested_ranks || return 1
   require_metadata_key "${result_metadata}" requested_ranks_per_node || return 1
@@ -326,6 +341,9 @@ run_validation_case() {
   )
   if [[ "${record_iteration_times}" == true ]]; then
     command+=(--record-iteration-times)
+  fi
+  if [[ "${record_iteration_phase_times}" == true ]]; then
+    command+=(--record-iteration-phase-times)
   fi
   if [[ -n "${iteration_stall_threshold_us}" ]]; then
     command+=(--iteration-stall-threshold-us "${iteration_stall_threshold_us}")

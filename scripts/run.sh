@@ -24,6 +24,8 @@ Options:
   --halo-multiplier N        Halo length multiplier. Default: 2.
   --samples-per-halo N       Independent timed samples per halo. Default: 1.
   --record-iteration-times   Write per-iteration max-rank timing diagnostics.
+  --record-iteration-phase-times
+                             Write per-phase timing for threshold-matched iterations.
   --iteration-stall-threshold-us VALUE
                              Emit iteration timing records at or above VALUE us.
                              Default/zero emits every measured iteration.
@@ -50,6 +52,7 @@ max_halo="1024"
 halo_multiplier="2"
 samples_per_halo="1"
 record_iteration_times=false
+record_iteration_phase_times=false
 iteration_stall_threshold_us=""
 validate=false
 phase_timing=false
@@ -113,6 +116,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --record-iteration-times)
       record_iteration_times=true
+      shift
+      ;;
+    --record-iteration-phase-times)
+      record_iteration_phase_times=true
       shift
       ;;
     --iteration-stall-threshold-us)
@@ -193,6 +200,10 @@ if [[ -n "${iteration_stall_threshold_us}" ]]; then
   [[ "${iteration_stall_threshold_us}" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]] ||
     ghalo_die "--iteration-stall-threshold-us must be nonnegative"
 fi
+if [[ "${record_iteration_phase_times}" == true &&
+      "${record_iteration_times}" != true ]]; then
+  ghalo_die "--record-iteration-phase-times requires --record-iteration-times"
+fi
 
 system="$(ghalo_resolve_system "${requested_system}")"
 ghalo_validate_system_name "${system}"
@@ -251,6 +262,9 @@ fi
 if [[ "${record_iteration_times}" == true ]]; then
   ghalo_args+=(--record-iteration-times)
 fi
+if [[ "${record_iteration_phase_times}" == true ]]; then
+  ghalo_args+=(--record-iteration-phase-times)
+fi
 if [[ -n "${iteration_stall_threshold_us}" ]]; then
   ghalo_args+=(--iteration-stall-threshold-us "${iteration_stall_threshold_us}")
 fi
@@ -287,6 +301,7 @@ ghalo_write_system_resolution "${result_dir}/system-resolution.txt" \
   printf 'halo_multiplier=%s\n' "${halo_multiplier}"
   printf 'samples_per_halo=%s\n' "${samples_per_halo}"
   printf 'iteration_timing_enabled=%s\n' "${record_iteration_times}"
+  printf 'iteration_phase_timing_enabled=%s\n' "${record_iteration_phase_times}"
   printf 'iteration_stall_threshold_us=%s\n' "${iteration_stall_threshold_us:-0}"
   printf 'requested_nodes=%s\n' "${nodes}"
   printf 'requested_ranks=%s\n' "${ranks}"
@@ -364,8 +379,27 @@ echo "gHALO exit status: ${status}"
     iteration_records_emitted="0"
     iteration_stall_count="0"
   fi
+  if [[ "${record_iteration_phase_times}" == true && -s "${result_dir}/iteration-phase-times.csv" ]]; then
+    iteration_phase_records_emitted="$(awk 'END { print (NR > 0 ? NR - 1 : 0) }' \
+      "${result_dir}/iteration-phase-times.csv")"
+    iteration_phase_backend_schema="$(awk -F, 'NR == 2 { gsub(/^"|"$/, "", $13); print $13 }' \
+      "${result_dir}/iteration-phase-times.csv")"
+  else
+    iteration_phase_records_emitted="0"
+    iteration_phase_backend_schema=""
+  fi
+  if [[ "${record_iteration_phase_times}" == true && -z "${iteration_phase_backend_schema}" ]]; then
+    case "${backend}:${rccl_sync_mode:-}" in
+      rccl:stream-ordered) iteration_phase_backend_schema="rccl-stream-ordered" ;;
+      rccl:*) iteration_phase_backend_schema="rccl-conservative" ;;
+      mpi-hip:*) iteration_phase_backend_schema="mpi-hip" ;;
+    esac
+  fi
   printf 'iteration_total_observed=%s\n' "${iteration_total_observed}"
   printf 'iteration_records_emitted=%s\n' "${iteration_records_emitted}"
   printf 'iteration_stall_count=%s\n' "${iteration_stall_count}"
+  printf 'iteration_phase_records_emitted=%s\n' "${iteration_phase_records_emitted}"
+  printf 'iteration_phase_backend_schema=%s\n' "${iteration_phase_backend_schema}"
+  printf 'iteration_phase_stall_threshold_us=%s\n' "${iteration_stall_threshold_us:-0}"
 } >>"${result_dir}/result-metadata.txt"
 exit "${status}"

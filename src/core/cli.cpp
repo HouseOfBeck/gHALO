@@ -52,6 +52,7 @@ void print_usage(std::ostream& out) {
       << "             [--min-halo N] [--max-halo N] [--halo-multiplier N]\n"
       << "             [--samples-per-halo N]\n"
       << "             [--record-iteration-times]\n"
+      << "             [--record-iteration-phase-times]\n"
       << "             [--iteration-stall-threshold-us VALUE]\n";
 }
 
@@ -107,6 +108,8 @@ CliOptions parse_cli_options(int argc, char** argv) {
       options.rccl_stage_b = true;
     } else if (arg == "--record-iteration-times") {
       options.record_iteration_times = true;
+    } else if (arg == "--record-iteration-phase-times") {
+      options.record_iteration_phase_times = true;
     } else if (arg == "--iteration-stall-threshold-us" && i + 1 < argc) {
       options.iteration_stall_threshold_us =
           parse_nonnegative_double(argv[++i], "--iteration-stall-threshold-us");
@@ -117,6 +120,11 @@ CliOptions parse_cli_options(int argc, char** argv) {
   if (options.max_halo < options.min_halo) {
     throw std::invalid_argument(
         "--max-halo must be greater than or equal to --min-halo");
+  }
+  if (options.record_iteration_phase_times &&
+      !options.record_iteration_times) {
+    throw std::invalid_argument(
+        "--record-iteration-phase-times requires --record-iteration-times");
   }
   return options;
 }

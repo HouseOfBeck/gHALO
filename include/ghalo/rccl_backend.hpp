@@ -56,6 +56,8 @@ public:
   void reset_phase_timing() override;
   PhaseTimingResult phase_timing_result(int iterations,
                                         double total_seconds) override;
+  void begin_iteration_phase_timing() override;
+  PhaseTimingResult end_iteration_phase_timing(double total_seconds) override;
 
   bool exchange_implemented() const;
 
@@ -132,6 +134,7 @@ private:
   std::unique_ptr<DeviceBuffer> hiew_;
   std::unique_ptr<DeviceBuffer> hoew_;
   PhaseTimingAccumulator phase_timing_;
+  PhaseTimingAccumulator iteration_phase_start_;
 };
 
 } // namespace ghalo

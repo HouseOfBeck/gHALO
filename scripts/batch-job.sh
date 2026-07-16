@@ -4,13 +4,13 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/batch-job.sh REPO_ROOT SYSTEM BACKEND ACCOUNT PARTITION NODES RANKS RANKS_PER_NODE TARGET_SECONDS MIN_HALO MAX_HALO HALO_MULTIPLIER SAMPLES_PER_HALO RECORD_ITERATION_TIMES ITERATION_STALL_THRESHOLD_US VALIDATE PHASE_TIMING RCCL_STAGE_B RCCL_SYNC_MODE CATEGORY LABEL EXTRA_SRUN_ARGS SUBMIT_COMMAND BATCH_STDOUT BATCH_STDERR
+Usage: scripts/batch-job.sh REPO_ROOT SYSTEM BACKEND ACCOUNT PARTITION NODES RANKS RANKS_PER_NODE TARGET_SECONDS MIN_HALO MAX_HALO HALO_MULTIPLIER SAMPLES_PER_HALO RECORD_ITERATION_TIMES RECORD_ITERATION_PHASE_TIMES ITERATION_STALL_THRESHOLD_US VALIDATE PHASE_TIMING RCCL_STAGE_B RCCL_SYNC_MODE CATEGORY LABEL EXTRA_SRUN_ARGS SUBMIT_COMMAND BATCH_STDOUT BATCH_STDERR
 EOF
 }
 
 [[ -n "${SLURM_JOB_ID:-}" ]] ||
   { echo "gHALO batch-job error: SLURM_JOB_ID is not set; this script must run inside a Slurm job" >&2; exit 1; }
-[[ $# -eq 25 ]] || { usage >&2; exit 2; }
+[[ $# -eq 26 ]] || { usage >&2; exit 2; }
 
 repo_root="$1"
 system="$2"
@@ -26,17 +26,18 @@ max_halo="${11}"
 halo_multiplier="${12}"
 samples_per_halo="${13}"
 record_iteration_times="${14}"
-iteration_stall_threshold_us="${15}"
-validate="${16}"
-phase_timing="${17}"
-rccl_stage_b="${18}"
-rccl_sync_mode="${19}"
-category="${20}"
-label="${21}"
-extra_srun_args="${22}"
-submit_command="${23}"
-batch_stdout="${24}"
-batch_stderr="${25}"
+record_iteration_phase_times="${15}"
+iteration_stall_threshold_us="${16}"
+validate="${17}"
+phase_timing="${18}"
+rccl_stage_b="${19}"
+rccl_sync_mode="${20}"
+category="${21}"
+label="${22}"
+extra_srun_args="${23}"
+submit_command="${24}"
+batch_stdout="${25}"
+batch_stderr="${26}"
 
 [[ "${repo_root}" = /* ]] ||
   { echo "gHALO batch-job error: REPO_ROOT must be an absolute path: ${repo_root}" >&2; exit 2; }
@@ -85,6 +86,7 @@ gHALO batch job
   halo_multiplier: ${halo_multiplier}
   samples_per_halo: ${samples_per_halo}
   record_iteration_times: ${record_iteration_times}
+  record_iteration_phase_times: ${record_iteration_phase_times}
   iteration_stall_threshold_us: ${iteration_stall_threshold_us}
   category: ${category}
   rccl_sync_mode: ${rccl_sync_mode}
@@ -115,6 +117,9 @@ if [[ "${phase_timing}" == "1" ]]; then
 fi
 if [[ "${record_iteration_times}" == "1" ]]; then
   run_args+=(--record-iteration-times)
+fi
+if [[ "${record_iteration_phase_times}" == "1" ]]; then
+  run_args+=(--record-iteration-phase-times)
 fi
 if [[ -n "${iteration_stall_threshold_us}" ]]; then
   run_args+=(--iteration-stall-threshold-us "${iteration_stall_threshold_us}")

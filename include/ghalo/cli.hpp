@@ -26,6 +26,7 @@ struct CliOptions {
   bool phase_timing = false;
   bool rccl_stage_b = false;
   bool record_iteration_times = false;
+  bool record_iteration_phase_times = false;
 };
 
 void print_usage(std::ostream& out);

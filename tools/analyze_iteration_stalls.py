@@ -50,6 +50,33 @@ class IterationRecord:
 
 
 @dataclass
+class PhaseRecord:
+    halo_words: int
+    sample_index: int
+    iteration_index: int
+    phase_name: str
+    phase_seconds: float
+    phase_max_rank: int
+    total_iteration_seconds: float
+    total_iteration_max_rank: int
+    backend_schema: str
+
+    @property
+    def phase_us(self) -> float:
+        return self.phase_seconds * 1.0e6
+
+
+@dataclass
+class PhaseSummary:
+    phase_name: str
+    dominant_iterations: int
+    cumulative_ms: float
+    median_us: float
+    max_us: float
+    max_rank_frequency: Dict[int, int]
+
+
+@dataclass
 class CaseSummary:
     result_dir: Path
     label: str
@@ -78,6 +105,10 @@ class CaseSummary:
     isolated_bad_samples: int
     multiple_bad_samples: int
     nearly_all_slow_samples: int
+    stalled_iterations_with_phase_data: int = 0
+    phase_summaries: List[PhaseSummary] = field(default_factory=list)
+    phase_iteration_breakdown: List[Dict[str, Any]] = field(default_factory=list)
+    stall_cause_classification: str = "mixed/unattributed"
     warnings: List[str] = field(default_factory=list)
 
 
@@ -208,6 +239,50 @@ def load_iteration_records(path: Path) -> Tuple[List[IterationRecord], List[str]
     return records, warnings
 
 
+def load_phase_records(path: Path) -> Tuple[List[PhaseRecord], List[str]]:
+    warnings: List[str] = []
+    if not path.exists():
+        warnings.append(f"missing iteration phase timing file: {path}")
+        return [], warnings
+    if path.stat().st_size == 0:
+        warnings.append(f"empty iteration phase timing file: {path}")
+        return [], warnings
+
+    records: List[PhaseRecord] = []
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        required = {
+            "halo_words",
+            "sample_index",
+            "iteration_index",
+            "total_iteration_seconds",
+            "total_iteration_max_rank",
+            "backend_schema",
+            "phase_name",
+            "phase_seconds",
+            "phase_max_rank",
+        }
+        if not reader.fieldnames or not required.issubset(reader.fieldnames):
+            raise StallAnalysisError(
+                f"iteration-phase-times.csv missing required columns: {path}"
+            )
+        for row in reader:
+            records.append(
+                PhaseRecord(
+                    halo_words=int(row["halo_words"]),
+                    sample_index=int(row["sample_index"]),
+                    iteration_index=int(row["iteration_index"]),
+                    phase_name=row["phase_name"],
+                    phase_seconds=float(row["phase_seconds"]),
+                    phase_max_rank=int(row["phase_max_rank"]),
+                    total_iteration_seconds=float(row["total_iteration_seconds"]),
+                    total_iteration_max_rank=int(row["total_iteration_max_rank"]),
+                    backend_schema=row["backend_schema"],
+                )
+            )
+    return records, warnings
+
+
 def longest_stall_free_sequence(sequence: str) -> int:
     longest = 0
     current = 0
@@ -230,11 +305,93 @@ def classify_sample(stalls: int, iterations: int) -> str:
     return "multiple"
 
 
+def phase_category(phase_name: str) -> str:
+    if "sync" in phase_name:
+        return "synchronization/final sync"
+    if "copy" in phase_name or "transpose" in phase_name:
+        return "copy/transpose"
+    if "communication" in phase_name or "enqueue" in phase_name or "mpi" in phase_name:
+        return "communication/enqueue"
+    return "mixed/unattributed"
+
+
+def analyze_phase_records(
+    phase_records: Sequence[PhaseRecord],
+    sample_by_key: Dict[SampleKey, SampleInfo],
+    affected_iterations: Optional[set[Tuple[int, int, int]]] = None,
+) -> Tuple[int, List[PhaseSummary], List[Dict[str, Any]], str, List[str]]:
+    warnings: List[str] = []
+    by_iteration: Dict[Tuple[int, int, int], List[PhaseRecord]] = defaultdict(list)
+    for record in phase_records:
+        key = SampleKey(record.halo_words, record.sample_index)
+        if key not in sample_by_key:
+            raise StallAnalysisError(
+                "iteration phase record references missing sample metadata: "
+                f"halo={record.halo_words} sample={record.sample_index}"
+            )
+        iteration_key = (record.halo_words, record.sample_index, record.iteration_index)
+        if affected_iterations is not None and iteration_key not in affected_iterations:
+            continue
+        by_iteration[(record.halo_words, record.sample_index, record.iteration_index)].append(record)
+
+    phase_values: Dict[str, List[PhaseRecord]] = defaultdict(list)
+    dominant_counter: Counter[str] = Counter()
+    category_counter: Counter[str] = Counter()
+    breakdown: List[Dict[str, Any]] = []
+    for key in sorted(by_iteration):
+        records = by_iteration[key]
+        for record in records:
+            phase_values[record.phase_name].append(record)
+        dominant = max(records, key=lambda item: (item.phase_seconds, -item.phase_max_rank, item.phase_name))
+        dominant_counter[dominant.phase_name] += 1
+        category_counter[phase_category(dominant.phase_name)] += 1
+        breakdown.append(
+            {
+                "halo_words": key[0],
+                "sample_index": key[1],
+                "iteration_index": key[2],
+                "dominant_phase": dominant.phase_name,
+                "dominant_phase_us": dominant.phase_us,
+                "dominant_phase_max_rank": dominant.phase_max_rank,
+                "total_iteration_us": dominant.total_iteration_seconds * 1.0e6,
+                "total_iteration_max_rank": dominant.total_iteration_max_rank,
+            }
+        )
+
+    summaries: List[PhaseSummary] = []
+    for phase_name in sorted(phase_values):
+        records = phase_values[phase_name]
+        phase_us = [record.phase_us for record in records]
+        summaries.append(
+            PhaseSummary(
+                phase_name=phase_name,
+                dominant_iterations=dominant_counter.get(phase_name, 0),
+                cumulative_ms=sum(phase_us) / 1000.0,
+                median_us=statistics.median(phase_us) if phase_us else 0.0,
+                max_us=max(phase_us) if phase_us else 0.0,
+                max_rank_frequency=dict(sorted(Counter(record.phase_max_rank for record in records).items())),
+            )
+        )
+
+    if not by_iteration:
+        return 0, [], [], "mixed/unattributed", warnings
+    if category_counter:
+        category, count = category_counter.most_common(1)[0]
+        classification = category if count > len(by_iteration) / 2.0 else "mixed/unattributed"
+    else:
+        classification = "mixed/unattributed"
+    return len(by_iteration), summaries, breakdown, classification, warnings
+
+
 def analyze_case(result_dir: Path, threshold_override_us: Optional[float] = None) -> CaseSummary:
     samples, payload = load_samples(result_dir)
     result_metadata = parse_key_value_file(result_dir / "result-metadata.txt")
     system_metadata = parse_key_value_file(result_dir / "system-resolution.txt")
     records, warnings = load_iteration_records(result_dir / "iteration-times.csv")
+    phase_records, phase_warnings = load_phase_records(
+        result_dir / "iteration-phase-times.csv"
+    )
+    warnings.extend(phase_warnings)
 
     sample_by_key = {sample.key: sample for sample in samples}
     total_iterations = sum(sample.iterations for sample in samples)
@@ -252,6 +409,7 @@ def analyze_case(result_dir: Path, threshold_override_us: Optional[float] = None
     stalls_by_sample: Dict[SampleKey, List[IterationRecord]] = defaultdict(list)
     rank_counter: Counter[int] = Counter()
     affected: List[Tuple[int, int, int, float, int]] = []
+    affected_iteration_keys = set()
     stall_durations = []
     for record in records:
         key = SampleKey(record.halo_words, record.sample_index)
@@ -273,6 +431,18 @@ def analyze_case(result_dir: Path, threshold_override_us: Optional[float] = None
                     record.max_rank,
                 )
             )
+            affected_iteration_keys.add(
+                (record.halo_words, record.sample_index, record.iteration_index)
+            )
+
+    (
+        stalled_iterations_with_phase_data,
+        phase_summaries,
+        phase_iteration_breakdown,
+        stall_cause_classification,
+        phase_analysis_warnings,
+    ) = analyze_phase_records(phase_records, sample_by_key, affected_iteration_keys)
+    warnings.extend(phase_analysis_warnings)
 
     sequence = "".join(
         "S" if sample.key in stalls_by_sample else "F" for sample in samples
@@ -343,6 +513,10 @@ def analyze_case(result_dir: Path, threshold_override_us: Optional[float] = None
         isolated_bad_samples=isolated,
         multiple_bad_samples=multiple,
         nearly_all_slow_samples=nearly_all,
+        stalled_iterations_with_phase_data=stalled_iterations_with_phase_data,
+        phase_summaries=phase_summaries,
+        phase_iteration_breakdown=phase_iteration_breakdown,
+        stall_cause_classification=stall_cause_classification,
         warnings=warnings,
     )
 
@@ -429,6 +603,8 @@ def markdown_report(summaries: Sequence[CaseSummary]) -> str:
                 f"- Isolated bad samples: {summary.isolated_bad_samples}",
                 f"- Multiple-bad-iteration samples: {summary.multiple_bad_samples}",
                 f"- Nearly-all-slow samples: {summary.nearly_all_slow_samples}",
+                f"- Stalled iterations with phase data: {summary.stalled_iterations_with_phase_data}",
+                f"- Primary stall classification: {summary.stall_cause_classification}",
                 "",
                 "Rank frequency:",
                 "",
@@ -448,6 +624,37 @@ def markdown_report(summaries: Sequence[CaseSummary]) -> str:
             for halo, sample, iteration, duration, rank in summary.affected_indices:
                 lines.append(
                     f"| {halo} | {sample} | {iteration} | {duration:.3f} | {rank} |"
+                )
+        else:
+            lines.append("None.")
+        lines.extend(["", "Phase dominance:", ""])
+        if summary.phase_summaries:
+            lines.append(
+                "| Phase | Dominant iterations | Cumulative ms | Median us | Max us |"
+            )
+            lines.append("| --- | ---: | ---: | ---: | ---: |")
+            for phase in summary.phase_summaries:
+                lines.append(
+                    f"| {phase.phase_name} | {phase.dominant_iterations} | "
+                    f"{phase.cumulative_ms:.3f} | {phase.median_us:.3f} | "
+                    f"{phase.max_us:.3f} |"
+                )
+        else:
+            lines.append("No phase data available.")
+        lines.extend(["", "Per-stalled-iteration phase breakdown:", ""])
+        if summary.phase_iteration_breakdown:
+            lines.append(
+                "| Halo | Sample | Iteration | Dominant phase | Phase us | Phase rank | Total us | Total rank |"
+            )
+            lines.append("| ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: |")
+            for row in summary.phase_iteration_breakdown:
+                lines.append(
+                    f"| {row['halo_words']} | {row['sample_index']} | "
+                    f"{row['iteration_index']} | {row['dominant_phase']} | "
+                    f"{row['dominant_phase_us']:.3f} | "
+                    f"{row['dominant_phase_max_rank']} | "
+                    f"{row['total_iteration_us']:.3f} | "
+                    f"{row['total_iteration_max_rank']} |"
                 )
         else:
             lines.append("None.")
@@ -488,6 +695,8 @@ def write_csv_summary(path: Path, summaries: Sequence[CaseSummary]) -> None:
                 "isolated_bad_samples",
                 "multiple_bad_samples",
                 "nearly_all_slow_samples",
+                "stalled_iterations_with_phase_data",
+                "stall_cause_classification",
                 "sample_sequence",
             ],
         )
@@ -519,6 +728,8 @@ def write_csv_summary(path: Path, summaries: Sequence[CaseSummary]) -> None:
                     "isolated_bad_samples": summary.isolated_bad_samples,
                     "multiple_bad_samples": summary.multiple_bad_samples,
                     "nearly_all_slow_samples": summary.nearly_all_slow_samples,
+                    "stalled_iterations_with_phase_data": summary.stalled_iterations_with_phase_data,
+                    "stall_cause_classification": summary.stall_cause_classification,
                     "sample_sequence": summary.sample_sequence,
                 }
             )
@@ -562,6 +773,20 @@ def summary_to_json(summary: CaseSummary) -> Dict[str, Any]:
         "isolated_bad_samples": summary.isolated_bad_samples,
         "multiple_bad_samples": summary.multiple_bad_samples,
         "nearly_all_slow_samples": summary.nearly_all_slow_samples,
+        "stalled_iterations_with_phase_data": summary.stalled_iterations_with_phase_data,
+        "stall_cause_classification": summary.stall_cause_classification,
+        "phase_summaries": [
+            {
+                "phase_name": phase.phase_name,
+                "dominant_iterations": phase.dominant_iterations,
+                "cumulative_ms": phase.cumulative_ms,
+                "median_us": phase.median_us,
+                "max_us": phase.max_us,
+                "max_rank_frequency": phase.max_rank_frequency,
+            }
+            for phase in summary.phase_summaries
+        ],
+        "phase_iteration_breakdown": summary.phase_iteration_breakdown,
         "warnings": summary.warnings,
     }
 

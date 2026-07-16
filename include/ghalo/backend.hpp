@@ -160,6 +160,11 @@ public:
                                                 double /*total_seconds*/) {
     return {};
   }
+  virtual void begin_iteration_phase_timing() {}
+  virtual PhaseTimingResult end_iteration_phase_timing(
+      double /*total_seconds*/) {
+    return {};
+  }
 };
 
 } // namespace ghalo
